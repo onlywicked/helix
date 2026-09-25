@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Helix · {{TITLE}}</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #ffffff; --border: #e3e6eb; --text: #16181d; --muted: #616875;
+    --accent: #3b5bdb; --accent-soft: #e7ecfd;
+    --pass: #1f8a4c; --pass-soft: #e3f4ea; --fail: #c92a2a; --fail-soft: #fdeaea;
+    --warn: #b35c00; --warn-soft: #fdf0e1; --idle: #8a919e; --idle-soft: #eff1f4;
+    --radius: 12px; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --surface: #171a20; --border: #2a2f38; --text: #e8eaee; --muted: #9aa1ad;
+      --accent: #8ea6ff; --accent-soft: #1d2540;
+      --pass: #5ccf8a; --pass-soft: #14271c; --fail: #ff8787; --fail-soft: #331a1c;
+      --warn: #ffb45e; --warn-soft: #33250f; --idle: #7d8592; --idle-soft: #20242b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+  }
+  main { max-width: 880px; margin: 0 auto; padding: 32px 16px 64px; }
+  header h1 { font-size: 26px; line-height: 1.25; margin: 6px 0 8px; letter-spacing: -0.01em; }
+  .eyebrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
+  .goal { color: var(--muted); margin: 0 0 12px; }
+  .meta { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: 13px; color: var(--muted); }
+  .meta b { color: var(--text); font-weight: 500; overflow-wrap: anywhere; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; background: var(--idle-soft); color: var(--idle); white-space: nowrap;
+  }
+  .chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .chip.passed, .chip.committed, .chip.done { background: var(--pass-soft); color: var(--pass); }
+  .chip.failed, .chip.error, .chip.invalid, .chip.stalled { background: var(--fail-soft); color: var(--fail); }
+  .chip.stale, .chip.awaiting_approval, .chip.awaiting_plan_approval, .chip.awaiting_input, .chip.paused
+    { background: var(--warn-soft); color: var(--warn); }
+  .chip.in_progress, .chip.building, .chip.planning { background: var(--accent-soft); color: var(--accent); }
+  .banner {
+    margin: 20px 0 8px; padding: 14px 16px; border-radius: var(--radius); background: var(--warn-soft);
+    color: var(--text); border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+  }
+  .banner strong { color: var(--warn); }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 28px 0 12px; }
+  ol.cps { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+  .cp {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px 18px; display: grid; grid-template-columns: 32px 1fr; gap: 0 14px;
+  }
+  .cp.current { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .num {
+    width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font-weight: 700;
+    font-size: 14px; background: var(--idle-soft); color: var(--muted);
+  }
+  .cp.committed .num { background: var(--pass-soft); color: var(--pass); }
+  .cp.current .num { background: var(--accent); color: var(--surface); }
+  .cp-head { display: flex; gap: 10px; align-items: center; justify-content: space-between; min-height: 32px; }
+  .cp-head > span { flex: none; }
+  .cp-title { font-size: 16px; font-weight: 650; margin: 0; flex: 1; min-width: 0; }
+  .summary { margin: 2px 0 10px; color: var(--muted); }
+  .gates { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+  .gate {
+    display: inline-flex; gap: 6px; align-items: center; font-size: 12px; padding: 3px 10px; border-radius: 8px;
+    border: 1px solid var(--border); color: var(--muted); text-decoration: none;
+  }
+  .gate .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--idle); }
+  .gate.passed .dot { background: var(--pass); } .gate.failed .dot, .gate.error .dot, .gate.invalid .dot { background: var(--fail); }
+  .gate.stale .dot { background: var(--warn); }
+  a.gate:hover { border-color: var(--accent); color: var(--text); }
+  .cp-head { grid-column: 2; }
+  .body { grid-column: 2; min-width: 0; }
+  ul.done { margin: 0 0 8px; padding-left: 18px; }
+  ul.done li { margin: 2px 0; }
+  .scope { font-size: 13px; color: var(--muted); margin: 0 0 8px; }
+  details { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; }
+  summary { cursor: pointer; font-size: 13px; color: var(--muted); user-select: none; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+  th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; }
+  td.kind { white-space: nowrap; }
+  .kind-edge { color: var(--warn); } .kind-error { color: var(--fail); } .kind-happy { color: var(--pass); }
+  .table-wrap { overflow-x: auto; }
+  .feedback { margin: 8px 0 0; padding: 8px 12px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 8px 8px 0; font-size: 13px; }
+  code, .mono { font-family: var(--mono); font-size: 12px; }
+  ul.history { list-style: none; margin: 0; padding: 0; font-size: 13px; color: var(--muted); }
+  ul.history li { padding: 4px 0; border-bottom: 1px dashed var(--border); display: flex; gap: 12px; }
+  ul.history time { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+  .empty { color: var(--muted); padding: 24px; text-align: center; border: 1px dashed var(--border); border-radius: var(--radius); }
+  @media (max-width: 560px) {
+    .cp { grid-template-columns: 28px 1fr; gap: 0 10px; padding: 14px; }
+    .num { width: 28px; height: 28px; font-size: 13px; }
+    .cp-head { min-height: 28px; }
+    .body { grid-column: 1 / -1; margin-top: 6px; }
+    .meta { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script>
+const RUN = /*HELIX_DATA*/null;
+const REFRESH_SECONDS = {{REFRESH}};
+const GATE_LABEL = { behavior: "Behavior", ui: "UI review", review: "Adversarial review", human: "Engineer" };
+const STATUS_LABEL = {
+  planning: "Planning", awaiting_plan_approval: "Plan awaiting approval", building: "Building",
+  awaiting_approval: "Awaiting your approval", awaiting_input: "Waiting for your answer",
+  paused: "Paused", stalled: "Stalled", done: "Done", pending: "Pending", in_progress: "In progress",
+  committed: "Committed",
+};
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const chip = (state, label) => `<span class="chip ${esc(state)}">${esc(label || STATUS_LABEL[state] || state)}</span>`;
+
+function banner(run) {
+  const messages = {
+    awaiting_plan_approval: "<strong>Review the plan.</strong> Does the sequence make sense? Reply in Claude Code to approve it or ask for changes.",
+    awaiting_approval: "<strong>Review the highlighted checkpoint.</strong> Check the running app and the evidence, then reply in Claude Code to approve it or give feedback.",
+    awaiting_input: "<strong>Claude has a question for you</strong> in the Claude Code session.",
+    done: "<strong>All checkpoints are committed.</strong> Test the whole feature and reply with any feedback; it becomes new checkpoints.",
+    stalled: "<strong>The run stalled.</strong> Claude could not make progress. Check the session and reply to resume.",
+    paused: "<strong>The run is paused.</strong>",
+  };
+  return messages[run.status] ? `<div class="banner">${messages[run.status]}</div>` : "";
+}
+
+function gates(cp) {
+  return cp.gates.map((g) => {
+    const label = `${GATE_LABEL[g.name]}${g.attempt > 1 ? ` · try ${g.attempt}` : ""}`;
+    const inner = `<span class="dot"></span>${esc(label)}`;
+    return g.evidence
+      ? `<a class="gate ${esc(g.state)}" href="${esc(g.evidence)}" title="${esc(g.state)}">${inner}</a>`
+      : `<span class="gate ${esc(g.state)}" title="${esc(g.state)}">${inner}</span>`;
+  }).join("");
+}
+
+function tests(cp) {
+  if (!cp.tests.length) return "";
+  const rows = cp.tests.map((t) => `<tr><td class="kind kind-${esc(t.kind)}">${esc(t.kind)}</td>
+    <td><b>${esc(t.name)}</b><br>Given ${esc(t.given)}; when ${esc(t.when)}; then ${esc(t.then)}</td></tr>`).join("");
+  return `<details><summary>${cp.tests.length} planned test case${cp.tests.length === 1 ? "" : "s"}</summary>
+    <div class="table-wrap"><table><thead><tr><th>Kind</th><th>Case</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
+}
+
+function checkpoint(cp, i, run) {
+  const current = cp.id === run.current;
+  return `<li class="cp ${esc(cp.status)} ${current ? "current" : ""}">
+    <div class="num">${i + 1}</div>
+    <div class="cp-head"><h3 class="cp-title">${esc(cp.title)}</h3>
+      <span>${chip(cp.status)}${cp.commit ? ` <span class="mono">${esc(cp.commit)}</span>` : ""}</span></div>
+    <div class="body">
+      <p class="summary">${esc(cp.summary)}</p>
+      <div class="gates">${gates(cp)}</div>
+      <ul class="done">${cp.done_when.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>
+      ${cp.ui ? `<p class="scope">UI compared: ${esc(cp.ui_scope)}</p>` : ""}
+      ${cp.feedback.map((f) => `<div class="feedback">Engineer: ${esc(f)}</div>`).join("")}
+      ${tests(cp)}
+    </div></li>`;
+}
+
+function localTime(iso) {
+  const d = new Date(iso);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function render(run) {
+  const autonomy = run.autonomy === null ? "all remaining checkpoints" : run.autonomy > 0 ? `next ${run.autonomy}` : "off";
+  const history = run.history.slice().reverse().map((h) =>
+    `<li><time>${esc(localTime(h.at))}</time><span>${esc(h.event)}</span></li>`).join("");
+  document.getElementById("app").innerHTML = `
+    <header>
+      <div class="eyebrow"><span>Helix run <code>${esc(run.id)}</code></span>${chip(run.status)}</div>
+      <h1>${esc(run.title)}</h1>
+      <p class="goal">${esc(run.goal)}</p>
+      <div class="meta"><span>Reference</span><b>${esc(run.reference)}</b>
+        ${run.target ? `<span>Target</span><b>${esc(run.target)}</b>` : ""}
+        <span>Autonomy</span><b>${esc(autonomy)}</b></div>
+    </header>
+    ${banner(run)}
+    <h2>Checkpoints</h2>
+    ${run.checkpoints.length ? `<ol class="cps">${run.checkpoints.map((cp, i) => checkpoint(cp, i, run)).join("")}</ol>`
+      : `<div class="empty">The checkpoint planner is still working.</div>`}
+    <h2>Activity</h2><ul class="history">${history}</ul>`;
+}
+
+render(RUN);
+try {
+  const key = `helix-scroll-${RUN.id}`;
+  const saved = sessionStorage.getItem(key);
+  if (saved) window.scrollTo(0, Number(saved));
+  window.addEventListener("scroll", () => sessionStorage.setItem(key, String(window.scrollY)), { passive: true });
+  document.querySelectorAll("details").forEach((d, i) => {
+    const k = `${key}-d${i}`;
+    if (sessionStorage.getItem(k) === "1") d.open = true;
+    d.addEventListener("toggle", () => sessionStorage.setItem(k, d.open ? "1" : "0"));
+  });
+} catch (e) { /* storage unavailable: the page still renders */ }
+if (REFRESH_SECONDS > 0) setTimeout(() => location.reload(), REFRESH_SECONDS * 1000);
+</script>
+</body>
+</html>
