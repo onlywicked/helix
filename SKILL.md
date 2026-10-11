@@ -89,6 +89,7 @@ When the last checkpoint is committed the run is `done`. Ask the engineer to tes
 | "ask me again" | `helix autonomy <run> --off` |
 | "stop / pause" | `helix pause <run>`; later `helix resume <run>` |
 | a lasting preference ("we never use X") | `helix learn "<rule>"` |
+| "skip the visual check for this one" (no comparable reference or device) | `helix waive <run> ui --reason "<their words>"` (only the UI gate can be waived) |
 | work on several screens at once | one run per screen, each in its own git worktree (`git worktree add`), since every run commits |
 
 Plan approval always needs the engineer.

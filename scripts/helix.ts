@@ -55,7 +55,7 @@ interface GateRecord {
   at: string;
   attempt?: number;
   evidence?: string;
-  mode?: "engineer" | "autonomous";
+  mode?: "engineer" | "autonomous" | "waived";
   reply?: string;
   [key: string]: unknown;
 }
@@ -402,6 +402,7 @@ function requiredGates(cp: Checkpoint, config: Config): Gate[] {
 function gateState(cp: Checkpoint, gate: Gate, fp: string | null): GateState {
   const record = cp.gates[gate];
   if (!record) return "pending";
+  if (record.mode === "waived") return "passed";
   if (record.status === "passed") return fp === null || record.fingerprint === fp ? "passed" : "stale";
   return record.status;
 }
@@ -1322,6 +1323,7 @@ function cmdCommit(args: Args) {
     git(root, ["add", "-A"]);
     const gateLines = gates.map((g) => {
       const record = cp.gates[g]!;
+      if (record.mode === "waived") return `- ${g}: waived by the engineer (${record.reply})`;
       return `- ${g}: passed (attempt ${record.attempt ?? 1}${g === "human" ? `, ${record.mode}` : ""})`;
     }).join("\n");
     const message = `helix(${run.id}): ${cp.id} ${cp.title}\n\n${cp.summary}\n\nGates:\n${gateLines}\n`;
@@ -1380,6 +1382,28 @@ function cmdAutonomy(args: Args) {
   const remaining = run.autonomy.remaining;
   console.log("Autonomy:", remaining === 0 ? "off (engineer approves every checkpoint)"
     : remaining === null ? "all remaining checkpoints" : `next ${remaining} checkpoint(s)`);
+}
+
+/**
+ * The engineer may waive the UI gate for a checkpoint whose visual comparison
+ * cannot be made meaningful (no comparable reference or device). Behavior and
+ * adversarial review can never be waived.
+ */
+function cmdWaive(args: Args) {
+  const root = repoRoot();
+  const gate = args._[1];
+  if (gate !== "ui") throw new HelixError("Only the ui gate can be waived; behavior and review always run.");
+  const reason = String(args.reason ?? "").trim();
+  if (!reason) throw new HelixError("--reason is required: record the engineer's ruling in their words.");
+  const { run, result: cp } = transaction(root, args._[0], (run) => {
+    const cp = requireCurrent(run);
+    if (!cp.ui) throw new HelixError(`${cp.id} has no UI gate to waive.`);
+    cp.gates.ui = { status: "passed", fingerprint: "", at: now(), mode: "waived", reply: reason };
+    run.history.push({ at: now(), event: `${cp.id} ui gate waived by the engineer`, reply: reason });
+    return cp;
+  });
+  console.log(`${cp.id}: UI gate waived (${reason}).`);
+  console.log("Next:", nextAction(run, root));
 }
 
 function cmdAsk(args: Args) {
@@ -1712,6 +1736,10 @@ const COMMANDS: Record<string, CommandSpec> = {
     positionals: 1, flags: { checkpoints: "string", all: "boolean", off: "boolean" }, run: cmdAutonomy,
   },
   ask: { help: "stop to ask the engineer a question", usage: `ask ${RUN} QUESTION`, positionals: 2, run: cmdAsk },
+  waive: {
+    help: "waive the current checkpoint's UI gate (engineer's ruling only)", usage: `waive ${RUN} ui --reason TEXT`,
+    positionals: 2, flags: { reason: "string" }, required: ["reason"], run: cmdWaive,
+  },
   pause: { help: "pause the run (engineer's request)", usage: `pause ${RUN}`, positionals: 1, run: cmdPause },
   resume: { help: "resume a paused or stalled run", usage: `resume ${RUN}`, positionals: 1, run: cmdResume },
   learn: {

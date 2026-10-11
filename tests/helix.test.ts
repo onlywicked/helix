@@ -330,6 +330,23 @@ describe("gates", () => {
     expect(fs.readFileSync(path.join(review, "reviewer-1.prompt.md"), "utf8")).toContain("docs/architecture.md");
   });
 
+  test("the engineer can waive only the ui gate, and the waiver survives code changes", () => {
+    approvedPlan();
+    write("app.py", "VALUE = 2\n");
+    helix(["gate", "behavior", "order"]);
+    expect(helix(["waive", "order", "review", "--reason", "x"], 1)).toContain("Only the ui gate");
+    helix(["waive", "order", "ui", "--reason", "no simulator available; Jest covers it"]);
+    write("app.py", "VALUE = 2  # later fix\n");
+    helix(["gate", "behavior", "order"]);
+    expect(helix(["status", "order"])).toContain("ui:passed");
+    helix(["gate", "review", "order"]);
+    helix(["request-approval", "order"]);
+    reply("ok");
+    helix(["approve", "order"]);
+    helix(["commit", "order"]);
+    expect(git("log", "-1", "--format=%B")).toContain("ui: waived by the engineer (no simulator available; Jest covers it)");
+  });
+
   test("a reviewer crash is an error, not a pass", () => {
     approvedPlan();
     write("app.py", "VALUE = 2\n");
