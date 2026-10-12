@@ -1,58 +1,85 @@
-# Helix skill for Claude Code
+# Helix
 
-A Claude Code implementation of [Shopify's Helix](https://shopify.engineering/helix): work is split into small checkpoints, and each checkpoint must pass four gates before the next one starts:
+An agent skill implementing [Shopify's Helix](https://shopify.engineering/helix). It works in any coding agent that can run shell commands: Claude Code, Codex, Gemini CLI, Cursor, GitHub Copilot CLI, opencode, and others.
 
-1. **Behavior**: planned test cases, written as real tests, pass (run by the CLI, no simulator or browser needed).
-2. **UI review**: a context-isolated reviewer compares implementation and reference screenshots in the same state, scoped to what the checkpoint built. Every fixable difference blocks. Mismatched states are rejected as `INVALID`.
-3. **Adversarial review**: two independent, context-isolated reviewers check the checkpoint's diff against your written guidelines. Any finding blocks.
-4. **Engineer**: you approve or give feedback. Feedback is saved to the shared learnings file, which every agent and reviewer reads. You can grant autonomy for N checkpoints or the whole run.
+Helix splits the work into small checkpoints. Each checkpoint must pass four gates before the next one starts:
 
-Every checkpoint ends in a commit whose message records each gate's result. The evidence (test logs, UI reviews with screenshots, reviewer verdicts) is archived locally and linked from the viewer.
+1. **Behavior**: the planned test cases, written as real tests, pass. The CLI runs them; no simulator or browser is needed.
+2. **UI review**: a context-isolated reviewer compares screenshots of the implementation and the reference in the same state, limited to what the checkpoint built. Every fixable difference blocks. If the screenshots show different states, the pair is rejected as `INVALID`.
+3. **Adversarial review**: two independent, context-isolated reviewers check the checkpoint's diff against your written guidelines. Any finding blocks. Findings keep their id across attempts; the fixer answers each one (fixed, or disputed with evidence), and a finding that keeps coming back after a dispute, or 3 times, comes to you for a ruling (`helix rule`).
+4. **Engineer**: you approve or give feedback. Feedback goes into the shared learnings file, which every agent and reviewer reads. You can grant autonomy for N checkpoints or for the whole run.
+
+Every checkpoint ends in a commit whose message records what each gate proved. The evidence (test logs, UI reviews with screenshots, reviewer verdicts and findings) is shown in the viewer and archived by commit hash, so it outlives the worktree.
 
 ## How gates are enforced
 
-Prose rules are advice; Helix makes them mechanical:
+Rules written in a prompt are only advice. Helix makes them mechanical:
 
-- `scripts/helix.ts` owns the run state. It runs the tests and launches the reviewers itself (`claude -p` with read-only tools and no project settings), so the orchestrating agent never writes a verdict.
-- Each verdict is bound to a fingerprint of the working tree. Any code change makes earlier gates stale, and `helix commit` refuses unless every gate passed on the exact tree being committed.
-- A **Stop hook** (the Ralph-loop idea) keeps the session working while a run is planning or building, and feeds back the next required action. After 3 stop attempts with no progress the run is marked `stalled` and the session may stop.
-- A **UserPromptSubmit hook** records engineer replies. `helix approve` fails unless the engineer actually replied after approval was requested, and it is void if the code changed while they were looking.
-
-The hooks are declared in `SKILL.md` and are armed when the skill is invoked. They are silent for sessions and repositories without a Helix run.
+- `scripts/helix.ts` owns the run state. It runs the tests and launches the reviewers itself, as separate read-only processes, so the orchestrating agent never writes a verdict.
+- Each verdict is bound to a fingerprint of the working tree. Any change makes earlier gates stale. `helix commit` refuses unless every gate passed on the exact tree being committed, and it undoes a commit if a git hook changed its content.
+- A **Stop hook** (the Ralph-loop idea) keeps the session working while a run is planning or building, and feeds back the next required action. After 3 stop attempts with no progress, the run is marked `stalled` and the session may stop.
+- A **prompt hook** records the engineer's replies. `helix approve` fails unless the engineer actually replied after approval was requested. The approval is void if the code changed while they were looking.
+- Subagents get their instructions from `helix brief <run> <role>`. It writes a self-contained brief with every input the subagent needs, so the orchestrator never has to assemble them and each subagent starts with a clean context.
 
 ## Install
 
-The skill runs in the agent you are talking to. It is not a background service: you invoke it in your session and the agent orchestrates the loop there.
+The skill runs inside the agent you are talking to; it is not a background service. Link this directory where your agent looks for skills, then set up the hooks.
 
-```sh
-# Claude Code (hooks are armed from SKILL.md when the skill runs)
-ln -s "$(pwd)" ~/.claude/skills/helix
+| Agent | Skill location | Hooks |
+|---|---|---|
+| Claude Code | `ln -s "$(pwd)" ~/.claude/skills/helix` | armed from `SKILL.md` when the skill runs |
+| Codex | `ln -s "$(pwd)" ~/.agents/skills/helix` | `bun scripts/helix.ts hooks codex`, then trust them in Codex (`/hooks`) |
+| Gemini CLI | `ln -s "$(pwd)" ~/.agents/skills/helix` | `bun scripts/helix.ts hooks gemini` |
+| Cursor | `ln -s "$(pwd)" ~/.agents/skills/helix` | `bun scripts/helix.ts hooks cursor` |
+| GitHub Copilot CLI | `ln -s "$(pwd)" ~/.agents/skills/helix` | `bun scripts/helix.ts hooks copilot` |
+| opencode, others | `~/.agents/skills/helix` | none needed: the agent relays your replies with `helix reply` |
 
-# Codex (and other agents that read ~/.agents/skills)
-ln -s "$(pwd)" ~/.agents/skills/helix
-bun scripts/helix.ts hooks codex    # once; then trust the hooks when Codex asks
-```
+Hooks are installed in your user-level agent config, never in the repository. They do nothing outside a Helix run.
 
-Requirements: [Bun](https://bun.sh) (runs the TypeScript CLI directly, no dependencies), `git`, and the `claude` CLI for reviewers. Optional: `codex` CLI as a second-model reviewer.
+**Agents without hooks.** Helix still works, with two differences:
+
+- The agent relays each of your replies word for word with `helix reply`. The viewer and the commit messages label those replies as relayed.
+- Nothing forces the agent to keep going: it loops on `helix status` by itself.
+
+Requirements:
+
+- [Bun](https://bun.sh), which runs the TypeScript CLI directly with no dependencies
+- `git`
+- a reviewer CLI: `claude` or `codex` (`helix init` warns when the configured one is missing)
 
 ## Use
 
-In your agent (Claude Code, Codex, ...), in the target repository:
+In your agent, in the target repository:
 
 ```
 /helix Migrate the Order Details screen from app/legacy/OrderDetails.tsx into the native app...
 ```
 
-Helix stops for you twice by default: to approve the checkpoint plan (shown in the run's viewer page, which `helix status` locates), and after each checkpoint (unless you grant autonomy). When everything is committed it asks you to test the whole feature, and your feedback becomes new checkpoints.
+Or say "use the helix skill to ..." in agents without slash commands.
 
-After resuming a Claude Code session (`claude --resume`), invoke `/helix` again to re-arm the hooks.
+Helix stops for you at these points:
+
+- **The plan.** You approve the checkpoint plan in the viewer.
+- **Each checkpoint.** You approve it, unless you granted autonomy.
+- **The finished feature.** You test it end to end; your feedback becomes new checkpoints, or you approve it and the run is finished.
+
+## The viewer
+
+`helix status` prints the path to each run's viewer, `viewer.html`. It is a static page that follows the run live; there is nothing to reload. It shows:
+
+- what the agent is doing now, or what it is waiting for from you
+- a progress bar across all checkpoints
+- for each checkpoint, its four gates, with every attempt's outcome
+- the evidence behind each verdict: test log tail, reference and implementation screenshots side by side with the reviewer's findings, and code review findings
+- the planned test cases and the activity log
 
 ## Where Helix keeps its files
 
-Nothing goes in the working tree, so formatters, linters and test runners never see Helix and its writes can never dirty the tree:
+Nothing goes in the working tree, so formatters, linters and test runners never see Helix, and its writes can never dirty the tree:
 
 - `<git common dir>/helix/config.json` and `learnings.md`: shared by every worktree of the repository.
-- `<git dir>/helix/runs/<run>/`: state, evidence, work files and `viewer.html`, per worktree, so parallel runs in separate worktrees stay isolated.
+- `<git common dir>/helix/evidence/<commit>/`: the evidence of each committed checkpoint.
+- `<git dir>/helix/runs/<run>/`: state, evidence, briefs, work files and the viewer. Each worktree has its own, so parallel runs in separate worktrees stay isolated. A worktree holds one unfinished run at a time, since gates fingerprint its whole tree.
 
 `helix status` prints the exact paths.
 
@@ -77,19 +104,29 @@ Reviewer backends:
 {"backend": "exec", "command": ["./tools/gemini-review.sh"]}
 ```
 
-`exec` receives the prompt on stdin, the JSON schema path in `HELIX_SCHEMA_FILE` and screenshot paths in `HELIX_IMAGES`, and prints the verdict JSON on stdout. Use it to plug in Gemini, which Shopify uses for UI review because of its spatial accuracy.
+The `exec` backend works like this:
 
-Set `HELIX_NO_OPEN=1` to stop the CLI from opening the viewer in a browser (headless runs).
+- It receives the prompt on stdin.
+- `HELIX_SCHEMA_FILE` holds the path to the JSON schema.
+- `HELIX_IMAGES` holds the screenshot paths, separated by `:`.
+- It prints the verdict JSON on stdout.
+
+The prompts spell out the exact JSON to return. Use `exec` to plug in any model. Shopify uses Gemini for UI review because of its spatial accuracy.
+
+Environment:
+
+- `HELIX_NO_OPEN=1`: the CLI never opens the viewer (headless runs).
+- `HELIX_SESSION_ID`: identifies the agent session for harnesses that export no session id of their own. Claude Code's and Codex's own session ids take precedence, so an agent cannot pose as another session.
 
 ## Layout
 
 ```
-SKILL.md                 orchestrator playbook + hook declarations
-scripts/helix.ts         state machine, gates, reviewers, hooks, viewer rendering
-scripts/viewer.html      viewer template
+SKILL.md                 orchestrator playbook (+ Claude Code hook declarations)
+scripts/helix.ts         state machine, gates, reviewers, briefs, hooks for every agent, viewer data
+scripts/viewer.html      live viewer
 prompts/                 subagent briefs (planner, test planner, test writer, implementer, fixer)
-                         and reviewer prompts used by the CLI (ui-reviewer, code-reviewer)
+                         and reviewer prompts (ui-reviewer, code-reviewer)
 tests/helix.test.ts      end-to-end CLI tests (real git repos, fake reviewers, simulated hooks)
 ```
 
-Development: `bun install` (type definitions only), then `bun run check` (strict type-check + tests).
+Development: run `bun install` (type definitions only), then `bun run check` (strict type-check and tests).

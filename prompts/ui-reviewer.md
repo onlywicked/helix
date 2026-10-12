@@ -8,7 +8,7 @@ You are a perfectionist design reviewer. Compare an IMPLEMENTATION screenshot ag
 - Reference (the source of truth): `{{REFERENCE}}` ({{REFERENCE_SIZE}} px)
 - Implementation (the new build): `{{IMPLEMENTATION}}` ({{IMPLEMENTATION_SIZE}} px)
 
-Open both images with the Read tool before answering.
+Look at both images before answering. They may already be attached to this message; otherwise open the files at these paths (relative to the repository root).
 
 Design documents (read them if listed; they explain intent the screenshot cannot):
 {{DESIGN}}
@@ -44,3 +44,20 @@ Engineer learnings from earlier checkpoints (apply them):
 - `INVALID`: the screenshots are not comparable (see step 1).
 
 Each finding needs `location` (where on screen, for example "top nav bar, right side"), `element`, `expected` (what the reference shows), `actual` (what the implementation shows). List every difference you find; a missed difference ships.
+
+## Output
+
+Return only this JSON object, with no prose around it. Every field is required, even when empty:
+
+```json
+{
+  "verdict": "FAIL",
+  "invalid_reason": "",
+  "findings": [
+    {"severity": "major", "location": "top nav bar, center", "element": "title",
+     "expected": "17pt semibold, centered", "actual": "15pt regular, left aligned",
+     "estimated_difference": "title ~12% smaller", "fixable_in_code": true}
+  ],
+  "out_of_scope_notes": ["Line items section is not built yet."]
+}
+```

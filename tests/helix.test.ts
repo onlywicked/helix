@@ -27,7 +27,7 @@ const APPROVE = { verdict: "approve", summary: "Looks right.", findings: [] };
 const REJECT = {
   verdict: "changes_requested", summary: "Layering broken.", findings: [{
     severity: "major", file: "app.py", line: 1, rule: "architecture.md#layers",
-    problem: "UI calls storage directly", required_fix: "go through the service",
+    problem: "UI calls storage directly", required_fix: "go through the service", repeats: "",
   }],
 };
 const UI_PASS = { verdict: "PASS", invalid_reason: "", findings: [], out_of_scope_notes: [] };
@@ -146,6 +146,32 @@ function screenshots(): [string, string] {
   return [ref, impl];
 }
 
+/** The fixer's answers to one review attempt, written where its brief says. */
+function answer(attempt: number, responses: { id: string; status: string; note?: string }[]) {
+  const file = path.join(root, `.git/helix/runs/order/work/fixes/cp-1-review-${String(attempt).padStart(3, "0")}.json`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ responses }));
+}
+
+/** A reviewer verdict raising one finding; `repeats` names the earlier finding it raises again. */
+const finding = (problem: string, repeats = "", line = 1) => ({
+  verdict: "changes_requested", summary: "Not yet.", findings: [{
+    severity: "major", file: "app.py", line, rule: "architecture.md#layers", problem, required_fix: "go through the service", repeats,
+  }],
+});
+
+/** Behavior and UI gates on the current tree, ready for a review. */
+function gatesBeforeReview() {
+  helix(["gate", "behavior", "order"]);
+  const [ref, impl] = screenshots();
+  helix(["gate", "ui", "order", "--pair", ref, impl, "loaded"]);
+}
+
+const reviewerPrompt = (attempt: number, reviewer: number) => fs.readFileSync(path.join(root,
+  `.git/helix/runs/order/evidence/cp-1/review-${String(attempt).padStart(3, "0")}/reviewer-${reviewer}.prompt.md`), "utf8");
+
+const fixerBrief = () => fs.readFileSync(helix(["brief", "order", "fixer"]).match(/Brief: (.+)/)![1], "utf8");
+
 function passAllGates() {
   write("app.py", "VALUE = 2\n");
   helix(["gate", "behavior", "order"]);
@@ -200,6 +226,24 @@ describe("planning", () => {
     expect(helix(["tests", "order", "--file", input("t.json", { checkpoints: { "cp-1": cases } })], 1)).toContain("edge and error");
   });
 
+  test("the planner's decisions reach the engineer with the plan", () => {
+    helix(["new", "order", "--goal", "g", "--reference", "r"]);
+    const cps = { checkpoints: [{ title: "Skeleton", summary: "s", done_when: ["x"], ui: false }],
+      decisions: ["The reference rounds half down; keep that?"] };
+    expect(helix(["plan", "order", "--file", input("cps.json", cps)])).toContain("rounds half down");
+    const brief = fs.readFileSync(helix(["brief", "order", "test-planner"]).match(/Brief: (.+)/)![1], "utf8");
+    expect(brief).toContain("Decisions the engineer has not settled yet");
+    expect(brief).toContain("rounds half down");
+    // A bare file name is read from the run's work dir, where the brief told the subagent to write.
+    fs.writeFileSync(path.join(root, ".git/helix/runs/order/work/tests.json"),
+      JSON.stringify({ checkpoints: { "cp-1": [{ name: "a", given: "a", when: "b", then: "c" }] } }));
+    helix(["tests", "order", "--file", "tests.json"]);
+    expect(helix(["submit-plan", "order", "--no-open"])).toContain("rounds half down");
+    expect(fs.readFileSync(path.join(root, ".git/helix/runs/order/viewer-data.js"), "utf8")).toContain("rounds half down");
+    const bad = { ...cps, decisions: [""] };
+    helix(["plan", "order", "--file", input("bad.json", bad)], 1);
+  });
+
   test("plan cannot be submitted without test cases", () => {
     helix(["new", "order", "--goal", "g", "--reference", "r"]);
     helix(["plan", "order", "--file", input("cps.json", { checkpoints: [{ title: "Skeleton", summary: "s", done_when: ["x"], ui: false }] })]);
@@ -225,6 +269,26 @@ describe("planning", () => {
     expect(helix(["approve", "order"], 1)).toContain("uncommitted changes");
   });
 
+  test("a run from an older version is not mistaken for one still revising its plan", () => {
+    plan();
+    helix(["submit-plan", "order", "--no-open"]);
+    reply("split step 1");
+    helix(["feedback", "order", "--text", "split step 1"]);
+    helix(["plan", "order", "--file", input("cps2.json", { checkpoints: [{ title: "Split", summary: "s", done_when: ["x"], ui: false }] })]);
+    const file = path.join(root, ".git/helix/runs/order/state.json");
+    const old = JSON.parse(fs.readFileSync(file, "utf8"));
+    delete old.plan_loaded_at;
+    fs.writeFileSync(file, JSON.stringify(old));
+    expect(helix(["status", "order"])).toContain("helix brief order test-planner");
+  });
+
+  test("re-planning one checkpoint's tests after the engineer changes it", () => {
+    approvedPlan();
+    expect(helix(["brief", "order", "test-planner"], 1)).toContain("--checkpoint");
+    const file = helix(["brief", "order", "test-planner", "--checkpoint", "cp-1"]).match(/Brief: (.+)/)![1];
+    expect(fs.readFileSync(file, "utf8")).toContain("Re-plan cp-1");
+  });
+
   test("plan feedback returns to planning and saves the learning", () => {
     plan();
     helix(["submit-plan", "order", "--no-open"]);
@@ -248,11 +312,16 @@ describe("gates", () => {
     expect(fs.existsSync(path.join(root, gate.evidence))).toBe(true);
   });
 
-  test("behavior gate fails when tests dirty the tree", () => {
+  test("behavior gate fails when tests dirty the tree, and sends the fixer to it", () => {
     approvedPlan();
     write("app.py", "VALUE = 2\n");
-    write("test.sh", "#!/bin/sh\ntouch coverage.out\n");
+    write("test.sh", "#!/bin/sh\ndate > coverage.out\n");
     expect(helix(["gate", "behavior", "order"], 2)).toContain("modified the working tree");
+    expect(helix(["status", "order"])).toContain("helix brief order fixer");
+    const file = helix(["brief", "order", "fixer"]).match(/Brief: (.+)/)![1];
+    const log = fs.readFileSync(file, "utf8").match(/Behavior log \(attempt 1\): (\S+)/)![1];
+    expect(fs.readFileSync(log, "utf8")).toContain("GATE FAILED: the test run modified the working tree");
+    expect(fs.readFileSync(log, "utf8")).toContain("coverage.out");
   });
 
   test("same-size edits right after a commit are fingerprinted (racy git)", () => {
@@ -316,13 +385,15 @@ describe("gates", () => {
     helix(["gate", "ui", "order", "--pair", ref, impl, "loaded"]);
     setVerdicts({ architecture: REJECT });
     expect(helix(["gate", "review", "order"], 2)).toContain("UI calls storage directly");
-    expect(helix(["status", "order"])).toContain("Dispatch the fixer with the findings");
+    expect(helix(["status", "order"])).toContain("helix brief order fixer");
     write("app.py", "VALUE = 2  # fixed\n");
     helix(["gate", "behavior", "order"]);
     helix(["gate", "ui", "order", "--pair", ref, impl, "loaded"]);
     expect(helix(["status", "order"])).toContain("the code changed since the last review failed");
-    setVerdicts({ architecture: { ...REJECT, verdict: "approve" } });
+    answer(1, [{ id: "F1", status: "fixed", note: "went through the service" }]);
+    setVerdicts({ architecture: { ...REJECT, verdict: "approve" } }); // "approve" with a finding still blocks
     helix(["gate", "review", "order"], 2);
+    answer(2, [{ id: "F2", status: "fixed" }]);
     setVerdicts({ architecture: APPROVE });
     helix(["gate", "review", "order"]);
     const review = path.join(root, ".git/helix/runs/order/evidence/cp-1/review-003");
@@ -330,11 +401,139 @@ describe("gates", () => {
     expect(fs.readFileSync(path.join(review, "reviewer-1.prompt.md"), "utf8")).toContain("docs/architecture.md");
   });
 
+  test("a finding raised again keeps its id until the reviewer is satisfied", () => {
+    approvedPlan();
+    write("app.py", "VALUE = 2\n");
+    gatesBeforeReview();
+    setVerdicts({ architecture: finding("UI calls storage directly") });
+    expect(helix(["gate", "review", "order"], 2)).toContain("F1 [major] app.py:1");
+    write("app.py", "VALUE = 2  # tried\n");
+    gatesBeforeReview();
+    answer(1, [{ id: "F1", status: "fixed", note: "moved the call" }]);
+    setVerdicts({ architecture: finding("UI still calls storage through a helper", "F1") });
+    const second = helix(["gate", "review", "order"], 2);
+    expect(second).toContain("F1 [major] app.py:1 (architecture.md#layers), architecture reviewer, raised in review attempts 1, 2");
+    expect(second).toContain("Fixer's answer to attempt 1: fixed - moved the call");
+    expect(state().checkpoints[0].findings).toHaveLength(1);
+    expect(reviewerPrompt(2, 1)).toContain("Still open from your earlier reviews");
+    expect(reviewerPrompt(2, 1)).toContain("- F1 [major]");
+    expect(reviewerPrompt(2, 2)).toContain("None. Review the change from scratch."); // reviewers stay independent
+    const brief = fixerBrief();
+    expect(brief).toContain("UI still calls storage through a helper");
+    expect(brief).toContain("cp-1-review-002.json");
+    write("app.py", "VALUE = 2  # through the service\n");
+    gatesBeforeReview();
+    answer(2, [{ id: "F1", status: "fixed", note: "service now" }]);
+    setVerdicts({ architecture: APPROVE });
+    expect(helix(["gate", "review", "order"])).toContain("- F1 app.py:1: UI still calls storage through a helper");
+    expect(state().checkpoints[0].findings[0]).toMatchObject({ status: "resolved", resolved_in: 3, raised: [1, 2] });
+  });
+
+  test("two reviewers reporting the same problem sit together for one fix", () => {
+    approvedPlan();
+    write("app.py", "VALUE = 2\n");
+    gatesBeforeReview();
+    setVerdicts({ architecture: finding("storage access in the UI", "", 4), correctness: finding("UI reads storage", "", 3) });
+    const out = helix(["gate", "review", "order"], 2);
+    expect(out).toContain("fix it once and answer both ids");
+    expect(out.indexOf("F2 [major] app.py:3")).toBeLessThan(out.indexOf("F1 [major] app.py:4"));
+  });
+
+  test("the review does not run again until the fixer has answered every finding", () => {
+    approvedPlan();
+    write("app.py", "VALUE = 2\n");
+    gatesBeforeReview();
+    setVerdicts({ architecture: finding("UI calls storage directly"), correctness: finding("no error state", "", 2) });
+    helix(["gate", "review", "order"], 2);
+    write("app.py", "VALUE = 2  # fixed\n");
+    gatesBeforeReview();
+    expect(helix(["gate", "review", "order"], 1)).toContain("has not answered every review finding: F1, F2");
+    answer(1, [{ id: "F1", status: "fixed" }]);
+    expect(helix(["gate", "review", "order"], 1)).toContain("has not answered every review finding: F2");
+    answer(1, [{ id: "F1", status: "fixed" }, { id: "F2", status: "disputed" }]);
+    expect(helix(["gate", "review", "order"], 1)).toContain("disputed without evidence");
+    answer(1, [{ id: "F1", status: "fixed" }, { id: "F9", status: "fixed" }]);
+    expect(helix(["gate", "review", "order"], 1)).toContain("F9 is not an unanswered finding");
+    expect(state().checkpoints[0].attempts.review).toBe(1); // refused before a new attempt began
+  });
+
+  test("a disputed finding raised again goes to the engineer, whose drop ruling ends it", () => {
+    approvedPlan();
+    write("app.py", "VALUE = 2\n");
+    gatesBeforeReview();
+    setVerdicts({ architecture: finding("VALUE must come from the service") });
+    helix(["gate", "review", "order"], 2);
+    answer(1, [{ id: "F1", status: "disputed", note: "There is no service layer in this app; docs/architecture.md lists none for constants." }]);
+    expect(helix(["status", "order"])).toContain("the fixer answered the review without changing code");
+    setVerdicts({ architecture: finding("VALUE must still come from the service", "F1") });
+    const out = helix(["gate", "review", "order"], 2);
+    expect(reviewerPrompt(2, 1)).toContain("Fixer's answer to attempt 1: disputed - There is no service layer");
+    expect(out).toContain("going in circles on F1 (the fixer disputed it, the reviewer raised it again)");
+    expect(helix(["status", "order"])).toContain("helix rule order <id> fix|drop");
+    expect(helix(["brief", "order", "fixer"], 1)).toContain("going in circles on F1");
+    expect(helix(["gate", "review", "order"], 1)).toContain("going in circles on F1");
+    expect(helix(["findings", "order"])).toContain("Needs the engineer's ruling.");
+    // Only the engineer rules, after the finding was raised.
+    expect(helix(["rule", "order", "F1", "drop", "--text", "fixer is right"], 1)).toContain("Only the engineer can rule on F1");
+    const asked = helix(["ask", "order", "--finding", "F1"]);
+    expect(asked).toContain(`F1 (architecture reviewer, app.py:1, raised 2x): "VALUE must still come from the service"`);
+    expect(asked).toContain('The fixer disputes it: "There is no service layer');
+    reply("the fixer is right, constants stay in app.py");
+    expect(helix(["status", "order"])).toContain('the engineer replied: "the fixer is right, constants stay in app.py". Record their ruling on F1');
+    helix(["rule", "order", "f1", "drop", "--text", "the fixer is right, constants stay in app.py",
+      "--learning", "Constants live in app.py; no service layer for them."]);
+    expect(fs.readFileSync(path.join(root, ".git/helix/learnings.md"), "utf8")).toContain("Constants live in app.py");
+    expect(helix(["status", "order"])).toContain("no review finding is left to fix; run `helix gate review order`");
+    // A reviewer that raises a dropped finding again does not block.
+    expect(helix(["gate", "review", "order"])).toContain("Raised again after the engineer dropped them (not blocking)");
+    expect(reviewerPrompt(3, 1)).toContain("Dropped by the engineer. Their ruling is final");
+    expect(state().checkpoints[0].gates.review.status).toBe("passed");
+  });
+
+  test("a fix ruling cannot be disputed, and a finding raised three times goes to the engineer", () => {
+    approvedPlan();
+    write("app.py", "VALUE = 2\n");
+    gatesBeforeReview();
+    setVerdicts({ architecture: finding("missing error state") });
+    helix(["gate", "review", "order"], 2);
+    for (const attempt of [1, 2]) {
+      write("app.py", `VALUE = 2  # try ${attempt}\n`);
+      gatesBeforeReview();
+      answer(attempt, [{ id: "F1", status: "fixed" }]);
+      setVerdicts({ architecture: finding("still no error state", "F1") });
+      helix(["gate", "review", "order"], 2);
+    }
+    expect(helix(["status", "order"])).toContain("going in circles on F1 (raised 3 times)");
+    helix(["ask", "order", "F1 keeps coming back. Is the error state required?"]);
+    reply("yes, it is required: show the retry banner");
+    helix(["rule", "order", "F1", "fix", "--text", "yes, it is required: show the retry banner"]);
+    expect(fixerBrief()).toContain(`Engineer's ruling: it must be fixed - "yes, it is required: show the retry banner"`);
+    write("app.py", "VALUE = 2  # banner\n");
+    gatesBeforeReview();
+    answer(3, [{ id: "F1", status: "disputed", note: "not needed" }]);
+    expect(helix(["gate", "review", "order"], 1)).toContain("the engineer ruled that F1 must be fixed");
+    answer(3, [{ id: "F1", status: "fixed", note: "retry banner" }]);
+    setVerdicts({ architecture: APPROVE });
+    helix(["gate", "review", "order"]);
+  });
+
+  test("a reviewer that requests changes without findings is an error, not a finding", () => {
+    approvedPlan();
+    write("app.py", "VALUE = 2\n");
+    gatesBeforeReview();
+    setVerdicts({ architecture: { verdict: "changes_requested", summary: "Hmm.", findings: [] } });
+    expect(helix(["gate", "review", "order"], 2)).toContain("requested changes but reported no findings");
+    expect(state().checkpoints[0].gates.review.status).toBe("error");
+    expect(helix(["status", "order"])).toContain("Never dispatch the fixer for an error");
+  });
+
   test("the engineer can waive only the ui gate, and the waiver survives code changes", () => {
     approvedPlan();
     write("app.py", "VALUE = 2\n");
     helix(["gate", "behavior", "order"]);
     expect(helix(["waive", "order", "review", "--reason", "x"], 1)).toContain("Only the ui gate");
+    expect(helix(["waive", "order", "ui", "--reason", "x"], 1)).toContain("Only the engineer can waive");
+    reply("skip the visual check, there is no simulator here");
     helix(["waive", "order", "ui", "--reason", "no simulator available; Jest covers it"]);
     write("app.py", "VALUE = 2  # later fix\n");
     helix(["gate", "behavior", "order"]);
@@ -363,19 +562,30 @@ describe("approval and commit", () => {
     approvedPlan();
     passAllGates();
     expect(helix(["commit", "order"], 1)).toContain("human gate is pending");
-    helix(["request-approval", "order"]);
+    const requested = helix(["request-approval", "order"]);
+    expect(requested).toContain("- behavior: passed (1 run, never sent back): 1 planned case via `sh test.sh`");
+    expect(requested).toContain("- review: passed (1 run, never sent back): every reviewer approved");
     expect(state().status).toBe("awaiting_approval");
     expect(stop()).toBeNull(); // stopping is allowed while waiting for the engineer
     expect(helix(["approve", "order"], 1)).toContain("No engineer reply");
     reply("ship it");
+    expect(helix(["status", "order"])).toContain('The engineer replied about checkpoint cp-1: "ship it"');
     helix(["approve", "order"]);
-    helix(["commit", "order"]);
+    helix(["commit", "order", "--trailer", "Reviewed-by: Engineer <e@example.com>"]);
     const message = git("log", "-1", "--format=%B");
+    expect(message).toContain("Reviewed-by: Engineer <e@example.com>");
     expect(message).toContain("helix(order): cp-1 Step 1");
-    expect(message).toContain("human: passed");
+    expect(message).toContain("- human: approved by the engineer");
+    expect(message).toContain("- behavior: passed (1 run, never sent back): 1 planned case via `sh test.sh`");
+    expect(message).toContain("- ui: passed (1 run, never sent back): 1 screen matches the reference");
+    expect(message).toContain("- review: passed (1 run, never sent back): every reviewer approved");
     expect(git("show", "--name-only", "--format=", "HEAD").trim()).toBe("app.py"); // only the product change
     expect(git("status", "--porcelain")).toBe(""); // Helix's own writes never dirty the tree
     expect(fs.existsSync(path.join(root, ".git/helix/runs/order/evidence/cp-1/summary.json"))).toBe(true);
+    // The evidence outlives the worktree: it is archived by commit in the shared git dir.
+    const archive = path.join(root, ".git/helix/evidence", git("rev-parse", "HEAD").trim());
+    expect(fs.existsSync(path.join(archive, "summary.json"))).toBe(true);
+    expect(fs.existsSync(path.join(archive, "review-001", "findings.md"))).toBe(true);
     const s = state();
     expect(s.checkpoints[0].status).toBe("committed");
     expect(s.current).toBe("cp-2");
@@ -461,6 +671,11 @@ describe("storage", () => {
     expect(fs.existsSync(path.join(root, ".helix"))).toBe(false);
   });
 
+  test("a worktree holds one unfinished run, since gates fingerprint the whole tree", () => {
+    helix(["new", "order", "--goal", "g", "--reference", "r"]);
+    expect(helix(["new", "screen", "--goal", "g", "--reference", "r"], 1)).toContain("Run 'order' is still in progress in this worktree");
+  });
+
   test("linked worktrees share config and learnings but keep their own runs", () => {
     helix(["new", "order", "--goal", "g", "--reference", "r"]);
     helix(["learn", "Prefer small modules."]);
@@ -509,6 +724,78 @@ describe("other agents", () => {
       cwd: root, encoding: "utf8", env: env(), input: JSON.stringify({ session_id: SESSION, cwd: root, hook_event_name: "Stop" }),
     });
     expect(JSON.parse(out.stdout).decision).toBe("block");
+  });
+
+  test("hooks install for Gemini, Cursor and Copilot, preserving other settings", () => {
+    const home = path.join(scratch, "home");
+    fs.mkdirSync(path.join(home, ".gemini"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".gemini/settings.json"), JSON.stringify({ theme: "dark" }));
+    for (const agent of ["gemini", "cursor", "copilot", "gemini"]) {
+      const proc = spawnSync("bun", [HELIX, "hooks", agent], { cwd: root, encoding: "utf8", env: { ...env(), HOME: home } });
+      expect(proc.status).toBe(0);
+    }
+    const read = (file: string) => JSON.parse(fs.readFileSync(path.join(home, file), "utf8"));
+    const gemini = read(".gemini/settings.json");
+    expect(gemini.theme).toBe("dark");
+    expect(gemini.hooks.AfterAgent).toHaveLength(1);
+    expect(gemini.hooks.BeforeAgent[0].hooks[0].command).toContain("hook prompt");
+    const cursor = read(".cursor/hooks.json");
+    expect(cursor.hooks.stop[0]).toMatchObject({ command: expect.stringContaining("hook stop cursor"), loop_limit: null });
+    expect(read(".copilot/hooks/helix.json").hooks.Stop[0].bash).toContain("hook stop");
+  });
+
+  test("Gemini's AfterAgent and BeforeAgent events speak the standard protocol", () => {
+    approvedPlan();
+    const out = hook("prompt", { session_id: SESSION, cwd: root, prompt: "go on", hook_event_name: "BeforeAgent" });
+    expect(out.hookSpecificOutput.hookEventName).toBe("BeforeAgent");
+    expect(hook("stop", { session_id: SESSION, cwd: root, hook_event_name: "AfterAgent" }).decision).toBe("block");
+  });
+
+  test("Cursor hooks use conversation ids, workspace roots and follow-up messages", () => {
+    approvedPlan();
+    const cursor = (event: string, payload: object) => {
+      const proc = spawnSync("bun", [HELIX, "hook", event, "cursor"], {
+        cwd: scratch, encoding: "utf8", input: JSON.stringify(payload), env: env(),
+      });
+      expect(proc.status).toBe(0);
+      return proc.stdout.trim() ? JSON.parse(proc.stdout) : null;
+    };
+    helix(["claim", "order"], 0, ""); // Cursor exports no session id to commands, so its hooks claim the run
+    expect(cursor("prompt", { conversation_id: "cursor-1", workspace_roots: [root], prompt: "continue" })).toBeNull();
+    expect(state().owner_session).toBe("cursor-1");
+    expect(cursor("stop", { conversation_id: "cursor-1", workspace_roots: [root], status: "completed" }).followup_message)
+      .toContain("helix gate behavior order");
+  });
+
+  test("the codex reviewer gets its prompt on stdin, since -i would swallow it", () => {
+    const bin = path.join(scratch, "bin");
+    fs.mkdirSync(bin);
+    const calls = path.join(scratch, "codex-calls.jsonl");
+    fs.writeFileSync(path.join(bin, "codex"), `#!/usr/bin/env bun
+const args = process.argv.slice(2);
+const stdin = await Bun.stdin.text();
+require("node:fs").appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ args, stdin }) + "\\n");
+const out = args[args.indexOf("-o") + 1];
+const ui = args.includes("-i");
+await Bun.write(out, JSON.stringify(ui ? ${JSON.stringify(UI_PASS)} : ${JSON.stringify(APPROVE)}));
+`);
+    fs.chmodSync(path.join(bin, "codex"), 0o755);
+    const configFile = path.join(root, ".git/helix/config.json");
+    const config = JSON.parse(fs.readFileSync(configFile, "utf8"));
+    config.reviewers.ui = { backend: "codex" };
+    fs.writeFileSync(configFile, JSON.stringify(config));
+    approvedPlan();
+    write("app.py", "VALUE = 2\n");
+    helix(["gate", "behavior", "order"]);
+    const [ref, impl] = screenshots();
+    const proc = spawnSync("bun", [HELIX, "gate", "ui", "order", "--pair", ref, impl, "loaded"], {
+      cwd: root, encoding: "utf8", env: { ...env(), PATH: `${bin}:${process.env.PATH}` },
+    });
+    expect(proc.status).toBe(0);
+    const call = JSON.parse(fs.readFileSync(calls, "utf8").trim());
+    expect(call.args.filter((a: string) => a === "-i")).toHaveLength(2);
+    expect(call.args.at(-1)).toEndWith("pair-1-implementation.png"); // no prompt after the images
+    expect(call.stdin).toContain("perfectionist design reviewer");
   });
 
   test("reviewers default to codex when claude is not installed", () => {
@@ -594,8 +881,136 @@ describe("viewer", () => {
     const page = fs.readFileSync(path.join(root, ".git/helix/runs/order/viewer.html"), "utf8");
     expect(page).not.toContain("</script><b>");
     expect(page).toContain("{{REFRESH}} $&"); // user text is never treated as a template
-    expect(page).toContain("REFRESH_SECONDS = 4");
     expect(page).not.toContain("/*HELIX_DATA*/");
+    // The open page follows the run through a data script beside it.
+    const data = fs.readFileSync(path.join(root, ".git/helix/runs/order/viewer-data.js"), "utf8");
+    expect(data.startsWith("window.helixUpdate(")).toBe(true);
+    expect(data).not.toContain("</script>");
+  });
+});
+
+describe("agents without a prompt hook", () => {
+  const AGENT = ""; // no session id exported, like Gemini CLI or Cursor
+  test("the agent relays the engineer's reply and it is labelled as relayed", () => {
+    plan({ ui: false, count: 1 });
+    helix(["submit-plan", "order", "--no-open"], 0, AGENT);
+    expect(helix(["status", "order"], 0, AGENT)).toContain("relay their reply word for word first");
+    expect(helix(["approve", "order"], 1, AGENT)).toContain("helix reply order");
+    helix(["reply", "order", "--text", "Looks good, approve it."], 0, AGENT);
+    helix(["approve", "order"], 0, AGENT);
+    expect(state().status).toBe("building");
+    write("app.py", "VALUE = 2\n");
+    helix(["gate", "behavior", "order"], 0, AGENT);
+    helix(["gate", "review", "order"], 0, AGENT);
+    helix(["request-approval", "order"], 0, AGENT);
+    helix(["reply", "order", "--text", "ship it"], 0, AGENT);
+    helix(["approve", "order"], 0, AGENT);
+    helix(["commit", "order"], 0, AGENT);
+    expect(git("log", "-1", "--format=%B")).toContain("- human: approved by the engineer, relayed by the agent");
+  });
+
+  test("once a prompt hook records messages, nobody can relay, so the agent cannot answer for the engineer", () => {
+    approvedPlan(); // the plan approval came through the prompt hook
+    write("app.py", "VALUE = 2\n");
+    helix(["gate", "behavior", "order"]);
+    const [ref, impl] = screenshots();
+    helix(["gate", "ui", "order", "--pair", ref, impl, "loaded"]);
+    helix(["gate", "review", "order"]);
+    helix(["request-approval", "order"]);
+    expect(helix(["status", "order"])).not.toContain("relay their reply");
+    for (const session of [SESSION, AGENT]) {
+      expect(helix(["reply", "order", "--text", "approved"], 1, session)).toContain("relaying is not allowed");
+    }
+    expect(helix(["approve", "order"], 1, AGENT)).toContain("No engineer reply");
+  });
+
+  test("a resumed run is handed to the next session with claim", () => {
+    approvedPlan();
+    expect(stop("new-session")).toBeNull(); // still owned by the old session
+    helix(["gate", "behavior", "order"], 2, AGENT); // an agent without a session id does not take it over
+    expect(state().owner_session).toBe(SESSION);
+    expect(helix(["claim", "order"], 0, AGENT)).toContain("released");
+    reply("keep going", "new-session");
+    expect(state().owner_session).toBe("new-session");
+    expect(stop("new-session").decision).toBe("block");
+  });
+});
+
+describe("briefs", () => {
+  test("the implementer brief carries everything the subagent needs", () => {
+    approvedPlan();
+    helix(["learn", "Titles are semibold."]);
+    const out = helix(["brief", "order", "implementer"]);
+    const file = out.match(/Brief: (.+)/)![1];
+    const brief = fs.readFileSync(file, "utf8");
+    expect(brief).toContain("# Implementer");
+    expect(brief).toContain("cp-1.t1");
+    expect(brief).toContain("sh test.sh");
+    expect(brief).toContain(path.join(fs.realpathSync(root), "docs/architecture.md"));
+    expect(brief).toContain(".git/helix/learnings.md");
+    expect(brief).toContain("title only"); // ui scope
+    expect(brief).not.toMatch(/\{\{\w+\}\}/);
+  });
+
+  test("the fixer brief points at the failed gate's evidence, and refuses when nothing failed", () => {
+    approvedPlan();
+    expect(helix(["brief", "order", "fixer"], 1)).toContain("nothing for the fixer");
+    helix(["gate", "behavior", "order"], 2);
+    const file = helix(["brief", "order", "fixer"]).match(/Brief: (.+)/)![1];
+    expect(fs.readFileSync(file, "utf8")).toMatch(/Behavior log \(attempt 1\): .*behavior-001\.log/);
+  });
+
+  test("planner briefs carry the engineer's plan feedback", () => {
+    plan();
+    helix(["submit-plan", "order", "--no-open"]);
+    reply("split step 1 in two");
+    helix(["feedback", "order", "--text", "split step 1 in two"]);
+    expect(helix(["status", "order"])).toContain("helix brief order planner");
+    const file = helix(["brief", "order", "planner"]).match(/Brief: (.+)/)![1];
+    const brief = fs.readFileSync(file, "utf8");
+    expect(brief).toContain("split step 1 in two");
+    expect(brief).toContain("work/checkpoints.json");
+  });
+});
+
+describe("finishing", () => {
+  test("the engineer accepts the finished feature and the hooks go quiet", () => {
+    approvedPlan({ ui: false, count: 1 });
+    write("app.py", "VALUE = 2\n");
+    helix(["gate", "behavior", "order"]);
+    helix(["gate", "review", "order"]);
+    helix(["request-approval", "order"]);
+    reply("ok");
+    helix(["approve", "order"]);
+    helix(["commit", "order"]);
+    expect(helix(["status", "order"])).toContain("test the whole feature");
+    expect(reply("tested it all, it works").hookSpecificOutput.additionalContext).toContain("helix approve order");
+    expect(helix(["approve", "order"])).toContain("accepted");
+    expect(reply("thanks")).toBeNull();
+  });
+
+  test("a commit hook that rewrites files cannot sneak ungated content into the commit", () => {
+    approvedPlan({ ui: false, count: 1 });
+    const hook = path.join(root, ".git/hooks/pre-commit");
+    fs.writeFileSync(hook, "#!/bin/sh\ngrep -q fmt app.py || { echo '# fmt' >> app.py; git add app.py; }\n");
+    fs.chmodSync(hook, 0o755);
+    write("app.py", "VALUE = 2\n");
+    helix(["gate", "behavior", "order"]);
+    helix(["gate", "review", "order"]);
+    helix(["request-approval", "order"]);
+    reply("ok");
+    helix(["approve", "order"]);
+    const before = git("rev-parse", "HEAD");
+    expect(helix(["commit", "order"], 1)).toContain("commit hook changed the files");
+    expect(git("rev-parse", "HEAD")).toBe(before);
+    expect(fs.readFileSync(path.join(root, "app.py"), "utf8")).toContain("# fmt");
+    helix(["gate", "behavior", "order"]);
+    helix(["gate", "review", "order"]);
+    helix(["request-approval", "order"]);
+    reply("ok again");
+    helix(["approve", "order"]);
+    helix(["commit", "order"]);
+    expect(git("show", "HEAD:app.py")).toContain("# fmt");
   });
 });
 
