@@ -105,8 +105,9 @@ If `helix approve` says no engineer reply was recorded, the prompt hook did not 
    ```
    Use `--no-ui` for logic-only work.
 3. If init warns that a reviewer CLI is missing, tell the engineer. Reviewers run on `claude` or `codex` by default. Another model can plug in through the `exec` backend; the README covers it.
+4. Tell the engineer to commit `.helix/`, so everyone's agents share the config and the learnings.
 
-Helix keeps its config, learnings, run state and evidence inside the git directory, never in the working tree. There is nothing to commit, ignore or exclude. `helix status` prints where everything lives.
+The config and learnings live in `.helix/` and are committed with the code; a learning recorded during a run is committed with its checkpoint. Gates ignore `.helix/`, so recording a learning never invalidates a gate. Run state and evidence stay inside the git directory. `helix status` prints where everything lives.
 
 ## The loop
 

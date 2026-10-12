@@ -196,7 +196,7 @@ beforeEach(() => {
   write("fake_reviewer.ts", FAKE_REVIEWER);
   setVerdicts({ ui: UI_PASS, architecture: APPROVE, correctness: APPROVE });
   helix(["init", "--test-command", "sh test.sh", "--guideline", "docs/architecture.md"]);
-  const configFile = path.join(root, ".git/helix/config.json");
+  const configFile = path.join(root, ".helix/config.json");
   const config = JSON.parse(fs.readFileSync(configFile, "utf8"));
   const fake = { backend: "exec", command: ["bun", "fake_reviewer.ts"] };
   config.reviewers = { ui: fake, code: [{ ...fake, lens: "architecture" }, { ...fake, lens: "correctness" }], timeout_seconds: 60 };
@@ -295,7 +295,7 @@ describe("planning", () => {
     reply("split step 1, and never mix fetch and render in one checkpoint");
     helix(["feedback", "order", "--text", "split step 1", "--learning", "Never mix fetch and render."]);
     expect(state().status).toBe("planning");
-    const learnings = fs.readFileSync(path.join(root, ".git/helix/learnings.md"), "utf8");
+    const learnings = fs.readFileSync(path.join(root, ".helix/learnings.md"), "utf8");
     expect(learnings).toContain("Never mix fetch and render.");
     expect(learnings).not.toContain("_\n\n-"); // a tight list, one lesson per line
   });
@@ -482,7 +482,7 @@ describe("gates", () => {
     expect(helix(["status", "order"])).toContain('the engineer replied: "the fixer is right, constants stay in app.py". Record their ruling on F1');
     helix(["rule", "order", "f1", "drop", "--text", "the fixer is right, constants stay in app.py",
       "--learning", "Constants live in app.py; no service layer for them."]);
-    expect(fs.readFileSync(path.join(root, ".git/helix/learnings.md"), "utf8")).toContain("Constants live in app.py");
+    expect(fs.readFileSync(path.join(root, ".helix/learnings.md"), "utf8")).toContain("Constants live in app.py");
     expect(helix(["status", "order"])).toContain("no review finding is left to fix; run `helix gate review order`");
     // A reviewer that raises a dropped finding again does not block.
     expect(helix(["gate", "review", "order"])).toContain("Raised again after the engineer dropped them (not blocking)");
@@ -663,12 +663,12 @@ describe("approval and commit", () => {
 });
 
 describe("storage", () => {
-  test("helix never writes into the working tree", () => {
+  test("runs stay out of the working tree; only the team files live in it", () => {
     approvedPlan();
     write("app.py", "VALUE = 2\n");
     helix(["gate", "behavior", "order"]);
     expect(git("status", "--porcelain")).toBe(" M app.py\n");
-    expect(fs.existsSync(path.join(root, ".helix"))).toBe(false);
+    expect(fs.readdirSync(path.join(root, ".helix")).sort()).toEqual(["config.json", "learnings.md"]);
   });
 
   test("a worktree holds one unfinished run, since gates fingerprint the whole tree", () => {
@@ -676,9 +676,8 @@ describe("storage", () => {
     expect(helix(["new", "screen", "--goal", "g", "--reference", "r"], 1)).toContain("Run 'order' is still in progress in this worktree");
   });
 
-  test("linked worktrees share config and learnings but keep their own runs", () => {
+  test("linked worktrees keep their own runs", () => {
     helix(["new", "order", "--goal", "g", "--reference", "r"]);
-    helix(["learn", "Prefer small modules."]);
     const linked = path.join(scratch, "linked");
     git("worktree", "add", "-q", linked, "-b", "feature");
     const run = (args: string[]) => {
@@ -687,11 +686,78 @@ describe("storage", () => {
       return proc.stdout + proc.stderr;
     };
     expect(run(["status"])).toContain("No Helix runs");
-    expect(fs.readFileSync(path.join(root, ".git/helix/learnings.md"), "utf8")).toContain("Prefer small modules.");
     run(["new", "screen", "--goal", "g", "--reference", "r"]);
     expect(run(["status"])).toContain("Run screen");
     expect(run(["status"])).not.toContain("Run order");
     expect(helix(["status"])).not.toContain("Run screen");
+  });
+});
+
+describe("team files", () => {
+  test("a learning travels with the checkpoint commit, and gates ignore it", () => {
+    approvedPlan({ ui: false, count: 1 });
+    write("app.py", "VALUE = 2\n");
+    helix(["gate", "behavior", "order"]);
+    expect(helix(["learn", "Constants live in app.py."])).toContain("Commit it so everyone's agents apply it");
+    helix(["gate", "review", "order"]); // the behavior gate still holds: a learning is not code
+    const patch = fs.readFileSync(path.join(root, ".git/helix/runs/order/evidence/cp-1/review-001/diff.patch"), "utf8");
+    expect(patch).toContain("app.py");
+    expect(patch).not.toContain(".helix");
+    expect(reviewerPrompt(1, 1)).toContain("Constants live in app.py.");
+    helix(["request-approval", "order"]);
+    reply("ship it");
+    helix(["approve", "order"]);
+    helix(["commit", "order"]);
+    expect(git("show", "--name-only", "--format=", "HEAD").split("\n")).toContain(".helix/learnings.md");
+    expect(git("status", "--porcelain")).toBe("");
+  });
+
+  test("a teammate's clone uses the team config, with their own overrides on top", () => {
+    const teammate = path.join(scratch, "teammate");
+    git("clone", "-q", root, teammate);
+    const original = root;
+    root = teammate;
+    try {
+      fs.mkdirSync(path.join(root, ".git/helix"), { recursive: true });
+      fs.writeFileSync(path.join(root, ".git/helix/config.local.json"), JSON.stringify({ test_command: "sh -c 'exit 3'" }));
+      expect(helix(["status"])).toContain("with your overrides in");
+      approvedPlan({ ui: false, count: 1 });
+      write("app.py", "VALUE = 2\n");
+      expect(helix(["gate", "behavior", "order"], 2)).toContain("exited 3");
+      expect(fs.readFileSync(path.join(root, ".helix/config.json"), "utf8")).toContain("fake_reviewer.ts");
+    } finally {
+      root = original;
+    }
+  });
+
+  test("learnings from another worktree apply before they are merged, and removed ones stay removed", () => {
+    helix(["learn", "Old rule."]);
+    git("add", "-A");
+    git("commit", "-q", "-m", "learn");
+    const linked = path.join(scratch, "linked");
+    git("worktree", "add", "-q", linked, "-b", "feature");
+    write(".helix/learnings.md", fs.readFileSync(path.join(root, ".helix/learnings.md"), "utf8").replace(/^- Old rule\..*\n/m, ""));
+    git("commit", "-qam", "drop the old rule");
+    spawnSync("bun", [HELIX, "learn", "New rule."], { cwd: linked, encoding: "utf8", env: env() });
+    approvedPlan();
+    const brief = fs.readFileSync(helix(["brief", "order", "implementer"]).match(/Brief: (.+)/)![1], "utf8");
+    expect(brief).toContain("not merged into this branch yet (apply them too):\n  - New rule.");
+    expect(brief).not.toContain("Old rule.");
+  });
+
+  test("init moves the config and learnings out of the git dir", () => {
+    fs.mkdirSync(path.join(root, ".git/helix"), { recursive: true });
+    fs.renameSync(path.join(root, ".helix/config.json"), path.join(root, ".git/helix/config.json"));
+    fs.renameSync(path.join(root, ".helix/learnings.md"), path.join(root, ".git/helix/learnings.md"));
+    fs.appendFileSync(path.join(root, ".git/helix/learnings.md"), "- Titles are semibold.\n");
+    expect(helix(["status"], 1)).toContain("Run `helix init` once to move them there");
+    const out = helix(["init"]);
+    expect(out).toContain("Moved your config from");
+    expect(out).toContain("Moved 2 learnings from");
+    expect(fs.existsSync(path.join(root, ".git/helix/config.json"))).toBe(false);
+    expect(fs.existsSync(path.join(root, ".git/helix/learnings.md"))).toBe(false);
+    expect(fs.readFileSync(path.join(root, ".helix/config.json"), "utf8")).toContain("fake_reviewer.ts");
+    expect(fs.readFileSync(path.join(root, ".helix/learnings.md"), "utf8")).toContain("- Titles are semibold.");
   });
 });
 
@@ -780,7 +846,7 @@ const ui = args.includes("-i");
 await Bun.write(out, JSON.stringify(ui ? ${JSON.stringify(UI_PASS)} : ${JSON.stringify(APPROVE)}));
 `);
     fs.chmodSync(path.join(bin, "codex"), 0o755);
-    const configFile = path.join(root, ".git/helix/config.json");
+    const configFile = path.join(root, ".helix/config.json");
     const config = JSON.parse(fs.readFileSync(configFile, "utf8"));
     config.reviewers.ui = { backend: "codex" };
     fs.writeFileSync(configFile, JSON.stringify(config));
@@ -803,12 +869,12 @@ await Bun.write(out, JSON.stringify(ui ? ${JSON.stringify(UI_PASS)} : ${JSON.str
     fs.mkdirSync(bin);
     fs.writeFileSync(path.join(bin, "codex"), "#!/bin/sh\n");
     fs.chmodSync(path.join(bin, "codex"), 0o755);
-    fs.rmSync(path.join(root, ".git/helix/config.json"));
+    fs.rmSync(path.join(root, ".helix/config.json"));
     const git = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
     const PATH = [bin, path.dirname(process.execPath), path.dirname(git), "/usr/bin", "/bin"].join(":");
     const proc = spawnSync(process.execPath, [HELIX, "init", "--test-command", "true"], { cwd: root, encoding: "utf8", env: { ...env(), PATH } });
     expect(proc.status).toBe(0);
-    const config = JSON.parse(fs.readFileSync(path.join(root, ".git/helix/config.json"), "utf8"));
+    const config = JSON.parse(fs.readFileSync(path.join(root, ".helix/config.json"), "utf8"));
     expect(config.reviewers.ui.backend).toBe("codex");
     expect(config.reviewers.code.map((r: any) => r.backend)).toEqual(["codex", "codex"]);
   });
@@ -947,7 +1013,7 @@ describe("briefs", () => {
     expect(brief).toContain("cp-1.t1");
     expect(brief).toContain("sh test.sh");
     expect(brief).toContain(path.join(fs.realpathSync(root), "docs/architecture.md"));
-    expect(brief).toContain(".git/helix/learnings.md");
+    expect(brief).toContain(".helix/learnings.md");
     expect(brief).toContain("title only"); // ui scope
     expect(brief).not.toMatch(/\{\{\w+\}\}/);
   });

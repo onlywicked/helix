@@ -232,18 +232,26 @@ function repoRoot(start = process.cwd()): string {
 }
 
 /**
- * Helix keeps its files inside git's own directory, never in the working tree,
- * so formatters, linters and test runners never see them and they can never
- * dirty the tree. Runs (state, evidence, viewer) live in the per-worktree git
- * dir so parallel runs in separate worktrees stay isolated; config and
- * learnings live in the common git dir so every worktree shares them.
+ * Helix keeps runs (state, evidence, viewer) inside git's own directory, never
+ * in the working tree, so formatters, linters and test runners never see them.
+ * They live in the per-worktree git dir so parallel runs in separate worktrees
+ * stay isolated. The team files (config and learnings) live in TEAM_DIR and are
+ * committed with the code, so every engineer's agents apply the same rules.
  */
 function gitPath(root: string, flag: "--absolute-git-dir" | "--git-common-dir"): string {
   return path.join(path.resolve(root, git(root, ["rev-parse", flag])), "helix");
 }
 const runsDir = (root: string) => path.join(gitPath(root, "--absolute-git-dir"), "runs");
 const sharedDir = (root: string) => gitPath(root, "--git-common-dir");
-const configPath = (root: string) => path.join(sharedDir(root), "config.json");
+/** The team files' folder. Gates ignore it, so editing a team file never invalidates a gate. */
+const TEAM_DIR = ".helix";
+const teamConfigPath = (root: string) => path.join(root, TEAM_DIR, "config.json");
+/** One engineer's overrides of the team config, such as a reviewer CLI only they have. Never committed. */
+const localConfigPath = (root: string) => path.join(sharedDir(root), "config.local.json");
+/** Where config and learnings lived before they moved into TEAM_DIR; `helix init` moves them. */
+const legacyPath = (root: string, name: "config.json" | "learnings.md") => path.join(sharedDir(root), name);
+/** Pathspec for the code under review: everything but the team files. */
+const CODE = ["--", ".", `:(exclude)${TEAM_DIR}`];
 
 function writeJson(file: string, data: unknown) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -328,16 +336,14 @@ function relTo(root: string, file: string): string {
 // ---------------------------------------------------------------- git state
 
 /**
- * Hash of the working tree (tracked + untracked, minus ignored files).
- * Computed through a throwaway index so the user's real index is untouched.
- * Any edit to code or tests changes it, which invalidates earlier gates.
+ * Hash of the working tree (tracked + untracked, minus ignored files and the
+ * team files). Computed through a throwaway index so the user's real index is
+ * untouched. Any edit to code or tests changes it, which invalidates earlier gates.
  */
 function fingerprint(root: string): string {
   let realIndex = git(root, ["rev-parse", "--git-path", "index"]);
   if (!path.isAbsolute(realIndex)) realIndex = path.join(root, realIndex);
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "helix-"));
-  try {
-    const index = path.join(tmp, "index");
+  return codeTree(root, (env, index) => {
     if (fs.existsSync(realIndex)) {
       // Keep the index's mtime: git re-hashes "racily clean" files (edited in
       // the same second the index was written) only when their mtime is not
@@ -346,8 +352,18 @@ function fingerprint(root: string): string {
       const { atime, mtime } = fs.statSync(realIndex);
       fs.utimesSync(index, atime, mtime);
     }
-    const env = { ...process.env, GIT_INDEX_FILE: index };
     git(root, ["add", "-A"], env);
+  });
+}
+
+/** The tree a throwaway index holds once `fill` has populated it, minus the team files. */
+function codeTree(root: string, fill: (env: NodeJS.ProcessEnv, index: string) => void): string {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "helix-"));
+  try {
+    const index = path.join(tmp, "index");
+    const env = { ...process.env, GIT_INDEX_FILE: index };
+    fill(env, index);
+    git(root, ["rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", TEAM_DIR], env);
     return git(root, ["write-tree"], env);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -359,20 +375,38 @@ function head(root: string): string | null {
 }
 
 function dirtyFiles(root: string): string[] {
-  return git(root, ["status", "--porcelain"]).split("\n").filter((l) => l.trim());
+  return git(root, ["status", "--porcelain", ...CODE]).split("\n").filter((l) => l.trim());
 }
 
 // ---------------------------------------------------------------- config & runs
 
+/** The defaults, then the team config, then the engineer's own overrides. */
 function loadConfig(root: string): Config {
-  const file = configPath(root);
-  if (!fs.existsSync(file)) throw new HelixError("Helix is not initialized in this repository. Run `helix init` first.");
+  if (fs.existsSync(legacyPath(root, "config.json"))) {
+    throw new HelixError(`Helix now keeps the config and learnings in ${TEAM_DIR}/ in the repository, so everyone on the ` +
+      `team shares them. Run \`helix init\` once to move them there, then commit ${TEAM_DIR}/.`);
+  }
+  const team = teamConfigPath(root);
+  if (!fs.existsSync(team)) {
+    throw new HelixError(`Helix is not initialized on this branch (no ${TEAM_DIR}/config.json). If your team set it up ` +
+      "on another branch, merge or rebase onto it; otherwise run `helix init`.");
+  }
+  const isObject = (v: unknown) => v !== null && typeof v === "object" && !Array.isArray(v);
   const merged: any = clone(DEFAULT_CONFIG);
-  for (const [key, value] of Object.entries(readJson(file))) {
-    const isObject = (v: unknown) => v !== null && typeof v === "object" && !Array.isArray(v);
-    merged[key] = isObject(value) && isObject(merged[key]) ? { ...merged[key], ...(value as object) } : value;
+  for (const file of [team, localConfigPath(root)].filter((f) => fs.existsSync(f))) {
+    for (const [key, value] of Object.entries(readConfigFile(file))) {
+      merged[key] = isObject(value) && isObject(merged[key]) ? { ...merged[key], ...(value as object) } : value;
+    }
   }
   return merged as Config;
+}
+
+function readConfigFile(file: string): Config {
+  try {
+    return readJson<Config>(file);
+  } catch (error) {
+    throw new HelixError(`${file} is not valid JSON (${(error as Error).message}). Fix it, or resolve its merge conflict.`);
+  }
 }
 
 const runDir = (root: string, runId: string) => path.join(runsDir(root), runId);
@@ -504,7 +538,7 @@ function advance(root: string, run: Run) {
   }
 }
 
-const learningsPath = (root: string) => path.join(sharedDir(root), "learnings.md");
+const learningsPath = (root: string) => path.join(root, TEAM_DIR, "learnings.md");
 
 function readLearnings(root: string): string {
   const file = learningsPath(root);
@@ -512,12 +546,57 @@ function readLearnings(root: string): string {
 }
 
 function appendLearning(root: string, text: string, source: string) {
+  appendLearningLines(root, [`- ${text.trim()} _(from ${source}, ${now().slice(0, 10)})_`]);
+}
+
+function appendLearningLines(root: string, lines: string[]) {
   const file = learningsPath(root);
   if (!fs.existsSync(file)) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, "# Helix learnings\n\nEngineer feedback that every Helix agent and reviewer applies.\n\n");
   }
-  fs.appendFileSync(file, `- ${text.trim()} _(from ${source}, ${now().slice(0, 10)})_\n`);
+  fs.appendFileSync(file, lines.map((l) => `${l}\n`).join(""));
 }
+
+/** The learnings themselves (one bullet each) in a learnings file's text. */
+const learningLines = (text: string) => text.split("\n").filter((line) => line.startsWith("- "));
+
+/**
+ * Learnings given in this clone's other worktrees that have not reached this
+ * branch yet, so parallel runs apply the engineer's feedback before it is
+ * merged. Only lines a worktree added since it forked from this branch count,
+ * so a learning this branch removed stays removed.
+ */
+function unmergedLearnings(root: string): string[] {
+  const own = new Set(learningLines(readLearnings(root)));
+  const here = fs.realpathSync(root);
+  const ours = head(root);
+  const found: string[] = [];
+  for (const entry of git(root, ["worktree", "list", "--porcelain"]).split("\n")) {
+    if (!entry.startsWith("worktree ")) continue;
+    const other = entry.slice("worktree ".length);
+    const file = learningsPath(other);
+    if (!fs.existsSync(file) || fs.realpathSync(other) === here) continue;
+    const theirs = head(other);
+    const base = ours && theirs ? sh(["git", "merge-base", ours, theirs], root, { check: false }).stdout.trim() : "";
+    const before = new Set(base
+      ? learningLines(sh(["git", "show", `${base}:${TEAM_DIR}/learnings.md`], root, { check: false }).stdout)
+      : []);
+    for (const line of learningLines(fs.readFileSync(file, "utf8"))) {
+      if (!own.has(line) && !before.has(line) && !found.includes(line)) found.push(line);
+    }
+  }
+  return found;
+}
+
+/** Every learning that applies here, for a reviewer prompt. */
+function learningsForReview(root: string): string {
+  const own = readLearnings(root) || "(none yet)";
+  const unmerged = unmergedLearnings(root);
+  return unmerged.length ? `${own}\n\n${UNMERGED_LEARNINGS}\n${unmerged.join("\n")}` : own;
+}
+
+const UNMERGED_LEARNINGS = "From this repository's other worktrees, not merged into this branch yet (apply them too):";
 
 // ---------------------------------------------------------------- review findings
 
@@ -1118,8 +1197,12 @@ function defaultConfig(): Config {
 
 function cmdInit(args: Args) {
   const root = repoRoot();
-  const file = configPath(root);
-  const config: Config = fs.existsSync(file) ? readJson(file) : defaultConfig();
+  const file = teamConfigPath(root);
+  const legacyConfig = legacyPath(root, "config.json");
+  const legacyLearnings = legacyPath(root, "learnings.md");
+  const shared = fs.existsSync(file);
+  const config: Config = shared ? readConfigFile(file)
+    : fs.existsSync(legacyConfig) ? readConfigFile(legacyConfig) : defaultConfig();
   if (args["test-command"] !== undefined) config.test_command = args["test-command"];
   for (const [flag, key] of [["guideline", "guidelines"], ["design", "design"]] as const) {
     for (const item of (args[flag] as string[] | undefined) ?? []) {
@@ -1134,20 +1217,43 @@ function cmdInit(args: Args) {
   if (args["no-ui"]) config.ui.enabled = false;
   if (args["capture-notes"] !== undefined) config.ui.capture_notes = args["capture-notes"];
   writeJson(file, config);
+  const moved: string[] = [];
+  if (fs.existsSync(legacyConfig)) {
+    if (shared) {
+      const kept = `${legacyConfig}.old`;
+      fs.renameSync(legacyConfig, kept);
+      moved.push(`The team's ${TEAM_DIR}/config.json now applies. Your earlier config is kept at ${kept}: copy any ` +
+        `setting only you need into ${localConfigPath(root)}.`);
+    } else {
+      fs.rmSync(legacyConfig);
+      moved.push(`Moved your config from ${legacyConfig} into ${TEAM_DIR}/config.json.`);
+    }
+  }
+  if (fs.existsSync(legacyLearnings)) {
+    const known = new Set(learningLines(readLearnings(root)));
+    const lines = learningLines(fs.readFileSync(legacyLearnings, "utf8")).filter((l) => !known.has(l));
+    if (lines.length) appendLearningLines(root, lines);
+    fs.rmSync(legacyLearnings);
+    moved.push(`Moved ${plural(lines.length, "learning")} from ${legacyLearnings} into ${TEAM_DIR}/learnings.md.`);
+  }
   if (!fs.existsSync(learningsPath(root))) {
     appendLearning(root, "Keep checkpoints small; a reviewer should grasp each one at a glance.", "helix init");
   }
   console.log(`Helix config: ${file}`);
   console.log(JSON.stringify(config, null, 2));
+  for (const line of moved) console.log(`\n${line}`);
+  console.log(`\nCommit ${TEAM_DIR}/ so everyone's agents share this config and the learnings. Settings only you ` +
+    `need, such as a reviewer CLI the team does not use, go in ${localConfigPath(root)}.`);
   if (!config.test_command) {
     console.log("\nWARNING: no test_command yet. The behavior gate cannot run without one " +
       "(set it with `helix init --test-command ...`).");
   }
-  const backends = new Set([config.reviewers?.ui, ...(config.reviewers?.code ?? [])].map((r) => r?.backend ?? "claude"));
+  const effective = loadConfig(root);
+  const backends = new Set([effective.reviewers.ui, ...effective.reviewers.code].map((r) => r?.backend ?? "claude"));
   for (const backend of backends) {
     if (backend !== "exec" && !Bun.which(backend)) {
       console.log(`\nWARNING: reviewers use the '${backend}' CLI, which is not installed. The UI and review gates will ` +
-        `error until it is, or until config.reviewers points at an installed backend (${configPath(root)}).`);
+        `error until it is, or until reviewers point at an installed backend in your own ${localConfigPath(root)}.`);
     }
   }
   if (!config.guidelines?.length) {
@@ -1387,7 +1493,7 @@ function cmdFeedback(args: Args) {
     run.history.push({ at: now(), event: `feedback on ${target}`, reply });
     return { kind: awaiting.kind, target };
   });
-  console.log(`Feedback recorded on ${target}.${args.learning ? ` Learning saved to ${learningsPath(root)}.` : ""}`);
+  console.log(`Feedback recorded on ${target}.${args.learning ? ` ${LEARNING_SAVED}` : ""}`);
   if (kind === "final") console.log(`Turn it into checkpoints with \`helix add ${run.id} --file <checkpoints.json>\`.`);
   else console.log("Next:", nextAction(run, root));
 }
@@ -1491,7 +1597,7 @@ async function gateUi(args: Args) {
   const outDir = path.join(evidenceDir(root, started, cp), `ui-${pad3(attempt)}`);
   fs.mkdirSync(outDir, { recursive: true });
   const template = fs.readFileSync(path.join(PROMPTS_DIR, "ui-reviewer.md"), "utf8");
-  const learnings = readLearnings(root) || "(none yet)";
+  const learnings = learningsForReview(root);
   const jobs = sources.map(({ ref, impl, state }, index) => {
     const n = index + 1;
     const copy = (src: string, kind: string) => {
@@ -1580,7 +1686,7 @@ async function gateReview(args: Args) {
   const cp0 = requireCurrent(run0);
   const fp = fingerprint(root);
   ensurePriorGates(run0, cp0, "review", fp, config);
-  const diff = git(root, ["diff", "--no-color", cp0.base!, fp]);
+  const diff = git(root, ["diff", "--no-color", cp0.base!, fp, ...CODE]);
   if (!diff.trim()) throw new HelixError(`${cp0.id} has no changes against its base commit; nothing to review.`);
   const reviewers = config.reviewers.code;
   if (reviewers.length < 2) {
@@ -1596,7 +1702,7 @@ async function gateReview(args: Args) {
   fs.mkdirSync(outDir, { recursive: true });
   const diffFile = path.join(outDir, "diff.patch");
   fs.writeFileSync(diffFile, `${diff}\n`);
-  const changed = git(root, ["diff", "--name-only", cp.base!, fp]).split("\n").filter(Boolean);
+  const changed = git(root, ["diff", "--name-only", cp.base!, fp, ...CODE]).split("\n").filter(Boolean);
   const template = fs.readFileSync(path.join(PROMPTS_DIR, "code-reviewer.md"), "utf8");
   const results: ReviewResult[] = await Promise.all(reviewers.map(async (spec, index) => {
     const n = index + 1;
@@ -1607,7 +1713,7 @@ async function gateReview(args: Args) {
       TESTS: formatTests(cp),
       GUIDELINES: bullet(config.guidelines, "(no guidelines documents configured: apply general engineering " +
         "standards and the conventions visible in the existing code)"),
-      LEARNINGS: readLearnings(root) || "(none yet)",
+      LEARNINGS: learningsForReview(root),
       DIFF: relTo(root, diffFile),
       CHANGED: bullet(changed),
       REFERENCE: bullet(cp.reference.length ? cp.reference : [started.reference || "(none)"]),
@@ -1747,7 +1853,7 @@ function cmdCommit(args: Args) {
     git(root, ["add", "-A"]);
     const trailers = ((args.trailer as string[] | undefined) ?? []).flatMap((t) => ["--trailer", t]);
     git(root, ["commit", "-q", "-m", message, ...trailers]);
-    if (git(root, ["rev-parse", "HEAD^{tree}"]) !== fp) {
+    if (codeTree(root, (env) => git(root, ["read-tree", "HEAD"], env)) !== fp) {
       git(root, ["reset", "-q", "--soft", parent!]);
       throw new HelixError("A git commit hook changed the files being committed, so the commit no longer matches " +
         "the tree the gates passed. The commit was undone and the hook's changes are kept in the working tree: " +
@@ -1899,7 +2005,7 @@ function cmdRule(args: Args) {
     run.history.push({ at: now(), event: `${cp.id} ${id}: the engineer ruled it ${decision === "fix" ? "must be fixed" : "wrong"}`, reply: said.text });
   });
   if (args.learning) appendLearning(root, args.learning, `${run.id} ${id}`);
-  console.log(`${id}: ${decision === "fix" ? "must be fixed" : "dropped"}.${args.learning ? " Learning saved." : ""}`);
+  console.log(`${id}: ${decision === "fix" ? "must be fixed" : "dropped"}.${args.learning ? ` ${LEARNING_SAVED}` : ""}`);
   console.log("Next:", nextAction(run, root));
 }
 
@@ -2104,6 +2210,8 @@ function cmdBrief(args: Args) {
     `- Design documents:\n${nested(config.design.map((d) => path.join(root, d)))}`,
     `- Learnings file (engineer rules, apply all of them): ${learningsPath(root)}`,
   ];
+  const unmerged = unmergedLearnings(root);
+  if (unmerged.length) common.push(`- ${UNMERGED_LEARNINGS}\n${nested(unmerged.map((l) => l.slice(2)))}`);
   if (run.plan_approval) {
     common.push(`- The engineer's words when approving the plan (where they differ from the goal, they win): ` +
       `"${run.plan_approval}"`);
@@ -2170,19 +2278,22 @@ function cmdLearn(args: Args) {
   const root = repoRoot();
   loadConfig(root);
   appendLearning(root, args._[0], args.source ?? "engineer");
-  console.log(`Saved to ${learningsPath(root)}.`);
+  console.log(`Saved to ${learningsPath(root)}. Commit it so everyone's agents apply it; a checkpoint commit includes it.`);
 }
+
+const LEARNING_SAVED = `Learning saved to ${TEAM_DIR}/learnings.md; the checkpoint commit includes it, so the team gets it on merge.`;
 
 function cmdStatus(args: Args) {
   const root = repoRoot();
   const config = loadConfig(root);
   const ids = args._[0] ? [args._[0]] : allRunIds(root);
+  const local = localConfigPath(root);
+  console.log(`Config: ${teamConfigPath(root)}${fs.existsSync(local) ? `, with your overrides in ${local}` : ""}\n` +
+    `Learnings: ${learningsPath(root)}\n`);
   if (!ids.length) {
-    console.log(`Config: ${configPath(root)}\nLearnings: ${learningsPath(root)}\n`);
     console.log("No Helix runs. Start one with `helix new`.");
     return;
   }
-  console.log(`Config: ${configPath(root)}\nLearnings: ${learningsPath(root)}\n`);
   const fp = fingerprint(root);
   ids.forEach((rid, index) => {
     const run = loadRun(root, rid);
@@ -2544,7 +2655,7 @@ interface CommandSpec {
 const RUN = "<run>";
 const COMMANDS: Record<string, CommandSpec> = {
   init: {
-    help: "create or update the Helix config (stored in the git dir, shared by all worktrees)",
+    help: `create or update the team config in ${TEAM_DIR}/ (commit it so the team shares it)`,
     usage: "init [--test-command CMD] [--guideline FILE]... [--design FILE]... [--no-ui] [--capture-notes TEXT]",
     positionals: 0,
     flags: { "test-command": "string", guideline: "repeat", design: "repeat", "no-ui": "boolean", "capture-notes": "string" },

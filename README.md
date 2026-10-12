@@ -7,7 +7,7 @@ Helix splits the work into small checkpoints. Each checkpoint must pass four gat
 1. **Behavior**: the planned test cases, written as real tests, pass. The CLI runs them; no simulator or browser is needed.
 2. **UI review**: a context-isolated reviewer compares screenshots of the implementation and the reference in the same state, limited to what the checkpoint built. Every fixable difference blocks. If the screenshots show different states, the pair is rejected as `INVALID`.
 3. **Adversarial review**: two independent, context-isolated reviewers check the checkpoint's diff against your written guidelines. Any finding blocks. Findings keep their id across attempts; the fixer answers each one (fixed, or disputed with evidence), and a finding that keeps coming back after a dispute, or 3 times, comes to you for a ruling (`helix rule`).
-4. **Engineer**: you approve or give feedback. Feedback goes into the shared learnings file, which every agent and reviewer reads. You can grant autonomy for N checkpoints or for the whole run.
+4. **Engineer**: you approve or give feedback. Feedback goes into the team's learnings file, committed with the code, which every agent and reviewer reads. You can grant autonomy for N checkpoints or for the whole run.
 
 Every checkpoint ends in a commit whose message records what each gate proved. The evidence (test logs, UI reviews with screenshots, reviewer verdicts and findings) is shown in the viewer and archived by commit hash, so it outlives the worktree.
 
@@ -75,9 +75,16 @@ Helix stops for you at these points:
 
 ## Where Helix keeps its files
 
-Nothing goes in the working tree, so formatters, linters and test runners never see Helix, and its writes can never dirty the tree:
+The team files are committed with the code, so every engineer's agents apply the same config and learnings:
 
-- `<git common dir>/helix/config.json` and `learnings.md`: shared by every worktree of the repository.
+- `.helix/config.json`: the team config (see Configuration).
+- `.helix/learnings.md`: the engineers' lasting feedback, one rule per line. A learning recorded during a run is committed with its checkpoint, so it reaches the team when that branch merges, and a teammate can push back on it in review like any guideline change. Learnings recorded in your other worktrees apply right away, before they are merged.
+
+Gates ignore `.helix/`: editing a team file never invalidates a gate, and reviewers never see it in the diff.
+
+Everything else stays out of the working tree, so formatters, linters and test runners never see it:
+
+- `<git common dir>/helix/config.local.json`: your own overrides of the team config, such as a reviewer CLI only you have. Never committed.
 - `<git common dir>/helix/evidence/<commit>/`: the evidence of each committed checkpoint.
 - `<git dir>/helix/runs/<run>/`: state, evidence, briefs, work files and the viewer. Each worktree has its own, so parallel runs in separate worktrees stay isolated. A worktree holds one unfinished run at a time, since gates fingerprint its whole tree.
 
@@ -85,7 +92,7 @@ Nothing goes in the working tree, so formatters, linters and test runners never 
 
 ## Configuration
 
-Created by `helix init`:
+Created by `helix init` in `.helix/config.json`. Commit it. Keys set in `<git common dir>/helix/config.local.json` override it for you alone; objects such as `reviewers` merge key by key.
 
 | Key | Meaning |
 |---|---|
