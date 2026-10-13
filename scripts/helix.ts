@@ -210,8 +210,34 @@ const pad3 = (n: number) => String(n).padStart(3, "0");
 const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 
+let outputDir: string | undefined;
+
+/**
+ * Runs a command to completion with its output captured in temp files, not
+ * pipes: under load, Bun's synchronous spawn can drop a fast child's piped
+ * output and still report exit 0 (https://github.com/oven-sh/bun/issues/34069).
+ */
+function runSync(command: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv; shell?: boolean; timeoutMs?: number } = {}) {
+  if (!outputDir) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "helix-output-"));
+    process.on("exit", () => fs.rmSync(dir, { recursive: true, force: true }));
+    outputDir = dir;
+  }
+  const files = [path.join(outputDir, "stdout"), path.join(outputDir, "stderr")];
+  const fds = files.map((file) => fs.openSync(file, "w"));
+  try {
+    const proc = spawnSync(command[0], command.slice(1), {
+      cwd: opts.cwd, env: opts.env, shell: opts.shell, timeout: opts.timeoutMs, stdio: ["ignore", fds[0], fds[1]],
+    });
+    const [stdout, stderr] = files.map((file) => fs.readFileSync(file, "utf8"));
+    return { status: proc.status, signal: proc.signal, error: proc.error, stdout, stderr };
+  } finally {
+    fds.forEach((fd) => fs.closeSync(fd));
+  }
+}
+
 function sh(args: string[], cwd: string, opts: { env?: NodeJS.ProcessEnv; check?: boolean } = {}) {
-  const proc = spawnSync(args[0], args.slice(1), { cwd, env: opts.env, encoding: "utf8", maxBuffer: 256 << 20 });
+  const proc = runSync(args, { cwd, env: opts.env });
   if (proc.error) throw new HelixError(`\`${args.join(" ")}\` could not run: ${proc.error.message}`);
   if ((opts.check ?? true) && proc.status !== 0) {
     throw new HelixError(`\`${args.join(" ")}\` failed:\n${(proc.stderr || proc.stdout).trim()}`);
@@ -223,13 +249,26 @@ function git(root: string, args: string[], env?: NodeJS.ProcessEnv): string {
   return sh(["git", ...args], root, { env }).stdout.trim();
 }
 
-function repoRoot(start = process.cwd()): string {
-  const proc = sh(["git", "rev-parse", "--show-toplevel"], start, { check: false });
-  if (proc.status !== 0) {
-    throw new HelixError("Helix needs a git repository (every checkpoint ends in a commit). Run `git init` first.");
+type Repo = { root: string; gitDir: string; commonDir: string; index: string };
+const repos = new Map<string, Repo>();
+
+/** Where the repository keeps things. It cannot change while a command runs, so git is asked once. */
+function repo(dir: string): Repo {
+  let found = repos.get(dir);
+  if (!found) {
+    const proc = sh(["git", "rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir", "--git-path", "index"],
+      dir, { check: false });
+    if (proc.status !== 0) {
+      throw new HelixError("Helix needs a git repository (every checkpoint ends in a commit). Run `git init` first.");
+    }
+    const [root, gitDir, commonDir, index] = proc.stdout.trim().split("\n");
+    found = { root, gitDir, commonDir: path.resolve(dir, commonDir), index: path.resolve(dir, index) };
+    repos.set(dir, found);
   }
-  return proc.stdout.trim();
+  return found;
 }
+
+const repoRoot = (start = process.cwd()) => repo(start).root;
 
 /**
  * Helix keeps runs (state, evidence, viewer) inside git's own directory, never
@@ -238,11 +277,8 @@ function repoRoot(start = process.cwd()): string {
  * stay isolated. The team files (config and learnings) live in TEAM_DIR and are
  * committed with the code, so every engineer's agents apply the same rules.
  */
-function gitPath(root: string, flag: "--absolute-git-dir" | "--git-common-dir"): string {
-  return path.join(path.resolve(root, git(root, ["rev-parse", flag])), "helix");
-}
-const runsDir = (root: string) => path.join(gitPath(root, "--absolute-git-dir"), "runs");
-const sharedDir = (root: string) => gitPath(root, "--git-common-dir");
+const runsDir = (root: string) => path.join(repo(root).gitDir, "helix", "runs");
+const sharedDir = (root: string) => path.join(repo(root).commonDir, "helix");
 /** The team files' folder. Gates ignore it, so editing a team file never invalidates a gate. */
 const TEAM_DIR = ".helix";
 const teamConfigPath = (root: string) => path.join(root, TEAM_DIR, "config.json");
@@ -290,8 +326,7 @@ function sessionId(): string | null {
   let pid = process.ppid;
   for (let depth = 0; pid > 1 && depth < 32; depth++) {
     if (pid === claudePid) return claude;
-    const [ppid, ...command] = spawnSync("ps", ["-o", "ppid=,comm=", "-p", String(pid)], { encoding: "utf8" })
-      .stdout.trim().split(/\s+/);
+    const [ppid, ...command] = runSync(["ps", "-o", "ppid=,comm=", "-p", String(pid)]).stdout.trim().split(/\s+/);
     if (/codex/i.test(command.join(" "))) return codex;
     pid = Number(ppid);
   }
@@ -341,9 +376,10 @@ function relTo(root: string, file: string): string {
  * untouched. Any edit to code or tests changes it, which invalidates earlier gates.
  */
 function fingerprint(root: string): string {
-  let realIndex = git(root, ["rev-parse", "--git-path", "index"]);
-  if (!path.isAbsolute(realIndex)) realIndex = path.join(root, realIndex);
-  return codeTree(root, (env, index) => {
+  const known = fingerprints.get(root);
+  if (known) return known;
+  const realIndex = repo(root).index;
+  const fp = codeTree(root, (env, index) => {
     if (fs.existsSync(realIndex)) {
       // Keep the index's mtime: git re-hashes "racily clean" files (edited in
       // the same second the index was written) only when their mtime is not
@@ -354,7 +390,17 @@ function fingerprint(root: string): string {
     }
     git(root, ["add", "-A"], env);
   });
+  fingerprints.set(root, fp);
+  return fp;
 }
+
+/**
+ * Fingerprints computed during this command. Helix itself never edits the
+ * code, so one stays valid until Helix runs something that may: the test
+ * command, a reviewer or a commit hook. Each calls treeMayHaveChanged().
+ */
+const fingerprints = new Map<string, string>();
+const treeMayHaveChanged = () => fingerprints.clear();
 
 /** The tree a throwaway index holds once `fill` has populated it, minus the team files. */
 function codeTree(root: string, fill: (env: NodeJS.ProcessEnv, index: string) => void): string {
@@ -1093,6 +1139,7 @@ async function runProcess(cmd: string[], opts: { cwd: string; env: Record<string
     proc.exited,
   ]);
   clearTimeout(timer);
+  treeMayHaveChanged();
   return { missing: false as const, stdout, stderr, code, timedOut };
 }
 
@@ -1536,10 +1583,8 @@ function gateBehavior(args: Args) {
   const fpBefore = fingerprint(root);
   const { run: started, cp, attempt } = beginAttempt(root, runId, "behavior");
   const log = path.join(evidenceDir(root, started, cp), `behavior-${pad3(attempt)}.log`);
-  const proc = spawnSync(command, {
-    shell: true, cwd: root, encoding: "utf8", timeout: config.test_timeout_seconds * 1000,
-    stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 << 20,
-  });
+  const proc = runSync([command], { shell: true, cwd: root, timeoutMs: config.test_timeout_seconds * 1000 });
+  treeMayHaveChanged();
   const timedOut = (proc.error as any)?.code === "ETIMEDOUT" || proc.signal === "SIGTERM";
   const code = timedOut ? 124 : (proc.status ?? 1);
   const output = `${proc.stdout ?? ""}${proc.stderr ?? ""}${timedOut ? `\nTIMEOUT after ${config.test_timeout_seconds}s` : ""}`;
@@ -1853,6 +1898,7 @@ function cmdCommit(args: Args) {
     git(root, ["add", "-A"]);
     const trailers = ((args.trailer as string[] | undefined) ?? []).flatMap((t) => ["--trailer", t]);
     git(root, ["commit", "-q", "-m", message, ...trailers]);
+    treeMayHaveChanged();
     if (codeTree(root, (env) => git(root, ["read-tree", "HEAD"], env)) !== fp) {
       git(root, ["reset", "-q", "--soft", parent!]);
       throw new HelixError("A git commit hook changed the files being committed, so the commit no longer matches " +

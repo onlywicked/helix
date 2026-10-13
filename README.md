@@ -133,7 +133,8 @@ scripts/helix.ts         state machine, gates, reviewers, briefs, hooks for ever
 scripts/viewer.html      live viewer
 prompts/                 subagent briefs (planner, test planner, test writer, implementer, fixer)
                          and reviewer prompts (ui-reviewer, code-reviewer)
-tests/helix.test.ts      end-to-end CLI tests (real git repos, fake reviewers, simulated hooks)
+tests/                   end-to-end CLI tests (real git repos, fake reviewers, simulated hooks),
+                         one file per area, sharing tests/helpers.ts
 ```
 
-Development: run `bun install` (type definitions only), then `bun run check` (strict type-check and tests).
+Development: run `bun install` (type definitions only), then `bun run check` (strict type-check, then the tests, one worker per test file).

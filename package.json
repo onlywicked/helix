@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "bun test --timeout 60000",
+    "test": "bun test --parallel --timeout 60000",
     "typecheck": "tsc --noEmit",
-    "check": "tsc --noEmit && bun test --timeout 60000"
+    "check": "tsc --noEmit && bun test --parallel --timeout 60000"
   },
   "devDependencies": {
     "@types/bun": "latest",
