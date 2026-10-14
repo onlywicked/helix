@@ -1,10 +1,11 @@
 // Hooks, the viewer, subagent briefs and the CLI surface.
 
-import { describe, expect, test } from "bun:test";
+import { expect } from "expect";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { approvedPlan, env, HELIX, helix, hook, plan, reply, root, run, SESSION, state, stop, useRepo, write } from "./helpers";
+import { describe, test } from "node:test";
+import { approvedPlan, env, HELIX, helix, hook, plan, reply, root, run, SESSION, state, stop, useRepo, write } from "./helpers.ts";
 
 useRepo();
 
@@ -49,7 +50,7 @@ describe("hooks", () => {
 
   test("hooks fail open on bad input", () => {
     for (const event of ["stop", "prompt"]) {
-      const proc = run(["bun", HELIX, "hook", event], { cwd: root, input: "{not json", env: env() });
+      const proc = run(["node", HELIX, "hook", event], { cwd: root, input: "{not json", env: env() });
       expect([proc.status, proc.stdout]).toEqual([0, ""]);
     }
   });

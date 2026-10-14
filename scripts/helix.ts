@@ -1,4 +1,3 @@
-#!/usr/bin/env bun
 /**
  * Helix: a checkpoint-and-gate state machine for agent-driven development.
  *
@@ -8,16 +7,17 @@
  * of the working tree, and a checkpoint can only be committed when all of its
  * gates passed against the exact tree being committed.
  *
- * Run `bun helix.ts help` for commands. No dependencies beyond Bun.
+ * Run `node helix.mjs help` for commands. No dependencies beyond Node.js.
  */
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { text } from "node:stream/consumers";
 
-const SKILL_DIR = path.resolve(import.meta.dir, "..");
+const SKILL_DIR = path.resolve(import.meta.dirname, "..");
 const PROMPTS_DIR = path.join(SKILL_DIR, "prompts");
 
 // Run statuses. The Stop hook keeps the agent working while a run it owns is
@@ -194,8 +194,10 @@ class HelixError extends Error {}
 
 /** A gate ran and did not pass: exit with the given code after printing. */
 class GateExit extends Error {
-  constructor(readonly code: number) {
+  readonly code: number;
+  constructor(code: number) {
     super(`gate exit ${code}`);
+    this.code = code;
   }
 }
 
@@ -210,34 +212,22 @@ const pad3 = (n: number) => String(n).padStart(3, "0");
 const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 
-let outputDir: string | undefined;
-
-/**
- * Runs a command to completion with its output captured in temp files, not
- * pipes: under load, Bun's synchronous spawn can drop a fast child's piped
- * output and still report exit 0 (https://github.com/oven-sh/bun/issues/34069).
- */
-function runSync(command: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv; shell?: boolean; timeoutMs?: number } = {}) {
-  if (!outputDir) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "helix-output-"));
-    process.on("exit", () => fs.rmSync(dir, { recursive: true, force: true }));
-    outputDir = dir;
-  }
-  const files = [path.join(outputDir, "stdout"), path.join(outputDir, "stderr")];
-  const fds = files.map((file) => fs.openSync(file, "w"));
-  try {
-    const proc = spawnSync(command[0], command.slice(1), {
-      cwd: opts.cwd, env: opts.env, shell: opts.shell, timeout: opts.timeoutMs, stdio: ["ignore", fds[0], fds[1]],
-    });
-    const [stdout, stderr] = files.map((file) => fs.readFileSync(file, "utf8"));
-    return { status: proc.status, signal: proc.signal, error: proc.error, stdout, stderr };
-  } finally {
-    fds.forEach((fd) => fs.closeSync(fd));
-  }
+/** Whether a command is on the PATH, like `command -v`. */
+function installed(command: string) {
+  return (process.env.PATH ?? "").split(path.delimiter).some((dir) => {
+    try {
+      fs.accessSync(path.join(dir, command), fs.constants.X_OK);
+      return fs.statSync(path.join(dir, command)).isFile();
+    } catch {
+      return false;
+    }
+  });
 }
 
+const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
 function sh(args: string[], cwd: string, opts: { env?: NodeJS.ProcessEnv; check?: boolean } = {}) {
-  const proc = runSync(args, { cwd, env: opts.env });
+  const proc = spawnSync(args[0], args.slice(1), { cwd, env: opts.env, encoding: "utf8", maxBuffer: 256 << 20 });
   if (proc.error) throw new HelixError(`\`${args.join(" ")}\` could not run: ${proc.error.message}`);
   if ((opts.check ?? true) && proc.status !== 0) {
     throw new HelixError(`\`${args.join(" ")}\` failed:\n${(proc.stderr || proc.stdout).trim()}`);
@@ -326,7 +316,7 @@ function sessionId(): string | null {
   let pid = process.ppid;
   for (let depth = 0; pid > 1 && depth < 32; depth++) {
     if (pid === claudePid) return claude;
-    const [ppid, ...command] = runSync(["ps", "-o", "ppid=,comm=", "-p", String(pid)]).stdout.trim().split(/\s+/);
+    const [ppid, ...command] = spawnSync("ps", ["-o", "ppid=,comm=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim().split(/\s+/);
     if (/codex/i.test(command.join(" "))) return codex;
     pid = Number(ppid);
   }
@@ -479,7 +469,7 @@ function withLock<T>(root: string, runId: string, fn: () => T): T {
       const age = Date.now() - fs.statSync(lock, { throwIfNoEntry: false })?.mtimeMs!;
       if (age > 30_000) fs.rmSync(lock, { recursive: true, force: true }); // holder died
       else if (Date.now() > deadline) throw new HelixError(`Timed out waiting for the lock on run '${runId}'.`);
-      else Bun.sleepSync(25);
+      else sleepSync(25);
     }
   }
   try {
@@ -1115,32 +1105,37 @@ function checkSchema(value: any, schema: any, where = "$") {
   if (kind === "array") value.forEach((item: unknown, i: number) => checkSchema(item, schema.items ?? {}, `${where}[${i}]`));
 }
 
-async function runProcess(cmd: string[], opts: { cwd: string; env: Record<string, string | undefined>; input?: string; timeoutMs: number }) {
-  let proc: ReturnType<typeof Bun.spawn>;
-  try {
-    proc = Bun.spawn(cmd, {
-      cwd: opts.cwd,
-      env: opts.env,
-      stdin: opts.input === undefined ? "ignore" : new Blob([opts.input]),
-      stdout: "pipe",
-      stderr: "pipe",
+type ProcessResult = { missing: true } | { missing: false; stdout: string; stderr: string; code: number | string | null; timedOut: boolean };
+
+function runProcess(cmd: string[], opts: { cwd: string; env: NodeJS.ProcessEnv; input?: string; timeoutMs: number }) {
+  return new Promise<ProcessResult>((resolve, reject) => {
+    const proc = spawn(cmd[0], cmd.slice(1), {
+      cwd: opts.cwd, env: opts.env, stdio: [opts.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     });
-  } catch {
-    return { missing: true as const };
-  }
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    proc.kill();
-  }, opts.timeoutMs);
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout as ReadableStream).text(),
-    new Response(proc.stderr as ReadableStream).text(),
-    proc.exited,
-  ]);
-  clearTimeout(timer);
-  treeMayHaveChanged();
-  return { missing: false as const, stdout, stderr, code, timedOut };
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill();
+    }, opts.timeoutMs);
+    proc.on("error", (error: NodeJS.ErrnoException) => {
+      clearTimeout(timer);
+      if (error.code === "ENOENT") resolve({ missing: true });
+      else reject(error);
+    });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout!.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    proc.stderr!.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+    proc.on("close", (code, signal) => {
+      clearTimeout(timer);
+      treeMayHaveChanged();
+      resolve({ missing: false, stdout, stderr, code: code ?? signal, timedOut });
+    });
+    if (proc.stdin) {
+      proc.stdin.on("error", () => {}); // a reviewer that exits without reading its prompt
+      proc.stdin.end(opts.input);
+    }
+  });
 }
 
 /**
@@ -1235,7 +1230,7 @@ type Args = { _: string[]; [flag: string]: any };
 /** Reviewers run on whichever agent CLI is installed, preferring Claude Code. */
 function defaultConfig(): Config {
   const config = clone(DEFAULT_CONFIG);
-  if (!Bun.which("claude") && Bun.which("codex")) {
+  if (!installed("claude") && installed("codex")) {
     config.reviewers.ui = { backend: "codex" };
     config.reviewers.code = [{ backend: "codex", lens: "architecture" }, { backend: "codex", lens: "correctness" }];
   }
@@ -1298,7 +1293,7 @@ function cmdInit(args: Args) {
   const effective = loadConfig(root);
   const backends = new Set([effective.reviewers.ui, ...effective.reviewers.code].map((r) => r?.backend ?? "claude"));
   for (const backend of backends) {
-    if (backend !== "exec" && !Bun.which(backend)) {
+    if (backend !== "exec" && !installed(backend)) {
       console.log(`\nWARNING: reviewers use the '${backend}' CLI, which is not installed. The UI and review gates will ` +
         `error until it is, or until reviewers point at an installed backend in your own ${localConfigPath(root)}.`);
     }
@@ -1583,7 +1578,10 @@ function gateBehavior(args: Args) {
   const fpBefore = fingerprint(root);
   const { run: started, cp, attempt } = beginAttempt(root, runId, "behavior");
   const log = path.join(evidenceDir(root, started, cp), `behavior-${pad3(attempt)}.log`);
-  const proc = runSync([command], { shell: true, cwd: root, timeoutMs: config.test_timeout_seconds * 1000 });
+  const proc = spawnSync(command, {
+    shell: true, cwd: root, encoding: "utf8", timeout: config.test_timeout_seconds * 1000,
+    stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 << 20,
+  });
   treeMayHaveChanged();
   const timedOut = (proc.error as any)?.code === "ETIMEDOUT" || proc.signal === "SIGTERM";
   const code = timedOut ? 124 : (proc.status ?? 1);
@@ -2377,7 +2375,8 @@ interface HookInstaller {
   note: string;
 }
 
-const isHelixHook = (command: unknown) => typeof command === "string" && /helix\.ts"? hook (stop|prompt)/.test(command);
+// helix.ts: installed before Helix ran on Node, as `bun .../helix.ts hook ...`.
+const isHelixHook = (command: unknown) => typeof command === "string" && /helix\.(mjs|ts)"? hook (stop|prompt)/.test(command);
 
 /** Claude-style config: {hooks: {Event: [{hooks: [{type, command, ...}]}]}}. */
 function mergeGrouped(extra: (kind: "stop" | "prompt") => object) {
@@ -2459,9 +2458,9 @@ function cmdHooks(args: Args) {
       "relay the engineer's replies with `helix reply`.");
   }
   const file = installer.file();
-  const script = path.join(SKILL_DIR, "scripts", "helix.ts");
+  const script = path.join(SKILL_DIR, "scripts", "helix.mjs");
   const suffix = installer.dialect === "cursor" ? " cursor" : "";
-  const command = (kind: string) => `bun ${JSON.stringify(script)} hook ${kind}${suffix} || true`;
+  const command = (kind: string) => `node ${JSON.stringify(script)} hook ${kind}${suffix} || true`;
   const existing = fs.existsSync(file) && fs.readFileSync(file, "utf8").trim() ? readJsonInput(file) : {};
   const config = installer.merge(existing, { stop: command("stop"), prompt: command("prompt") }, installer.events);
   writeJson(file, config);
@@ -2472,7 +2471,7 @@ function cmdHooks(args: Args) {
 function openFile(file: string) {
   if (process.env.HELIX_NO_OPEN) return;
   const opener = process.platform === "darwin" ? "open" : "xdg-open";
-  if (Bun.which(opener)) spawnSync(opener, [file], { stdio: "ignore" });
+  if (installed(opener)) spawnSync(opener, [file], { stdio: "ignore" });
 }
 
 // ---------------------------------------------------------------- hooks
@@ -2508,7 +2507,7 @@ function hookContinue(dialect: HookDialect, reason: string) {
  */
 async function hookMain(event: string, dialect: HookDialect) {
   try {
-    const hook = readHookEvent(JSON.parse((await Bun.stdin.text()) || "{}"));
+    const hook = readHookEvent(JSON.parse((await text(process.stdin)) || "{}"));
     const root = repoRoot(hook.cwd);
     if (!fs.existsSync(runsDir(root))) return;
     const mine = allRunIds(root).filter((rid) => {
@@ -2874,12 +2873,12 @@ async function main(argv: string[]) {
     }
     await spec.run(parse(spec, rest));
   } catch (error) {
-    if (error instanceof GateExit) process.exit(error.code);
-    if (error instanceof HelixError) {
+    // Setting the exit code instead of exiting lets piped output finish writing.
+    if (error instanceof GateExit) process.exitCode = error.code;
+    else if (error instanceof HelixError) {
       console.error(`helix: ${error.message}`);
-      process.exit(1);
-    }
-    throw error;
+      process.exitCode = 1;
+    } else throw error;
   }
 }
 

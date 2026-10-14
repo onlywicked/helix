@@ -1,15 +1,16 @@
 // Agents other than Claude Code, and agents without a prompt hook.
 
-import { describe, expect, test } from "bun:test";
+import { expect } from "expect";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { APPROVE, approvedPlan, env, git, HELIX, helix, hook, plan, reply, root, run, scratch, screenshots, SESSION, state, stop, UI_PASS, useRepo, write } from "./helpers";
+import { describe, test } from "node:test";
+import { APPROVE, approvedPlan, env, git, HELIX, helix, hook, plan, reply, root, run, scratch, screenshots, SESSION, state, stop, UI_PASS, useRepo, write } from "./helpers.ts";
 
 useRepo();
 
 describe("other agents", () => {
   test("a Codex session owns the runs it creates", () => {
-    const proc = run(["bun", HELIX, "new", "order", "--goal", "g", "--reference", "r"], {
+    const proc = run(["node", HELIX, "new", "order", "--goal", "g", "--reference", "r"], {
       cwd: root, env: { ...env(), CLAUDE_CODE_SESSION_ID: "", CODEX_SESSION_ID: "codex-session" },
     });
     expect(proc.status).toBe(0);
@@ -19,10 +20,11 @@ describe("other agents", () => {
   test("hooks codex merges into existing Codex hooks idempotently", () => {
     const codexHome = path.join(scratch, "codex-home");
     fs.mkdirSync(codexHome);
-    const existing = { hooks: { Stop: [{ hooks: [{ type: "command", command: "node other-hook.mjs" }] }] } };
+    const existing = { hooks: { Stop: [{ hooks: [{ type: "command", command: "node other-hook.mjs" }] }],
+      UserPromptSubmit: [{ hooks: [{ type: "command", command: 'bun "/old/helix/scripts/helix.ts" hook prompt || true' }] }] } };
     fs.writeFileSync(path.join(codexHome, "hooks.json"), JSON.stringify(existing));
     for (let i = 0; i < 2; i++) {
-      const proc = run(["bun", HELIX, "hooks", "codex"], { cwd: root, env: { ...env(), CODEX_HOME: codexHome } });
+      const proc = run(["node", HELIX, "hooks", "codex"], { cwd: root, env: { ...env(), CODEX_HOME: codexHome } });
       expect(proc.status).toBe(0);
     }
     const config = JSON.parse(fs.readFileSync(path.join(codexHome, "hooks.json"), "utf8"));
@@ -43,7 +45,7 @@ describe("other agents", () => {
     fs.mkdirSync(path.join(home, ".gemini"), { recursive: true });
     fs.writeFileSync(path.join(home, ".gemini/settings.json"), JSON.stringify({ theme: "dark" }));
     for (const agent of ["gemini", "cursor", "copilot", "gemini"]) {
-      const proc = run(["bun", HELIX, "hooks", agent], { cwd: root, env: { ...env(), HOME: home } });
+      const proc = run(["node", HELIX, "hooks", agent], { cwd: root, env: { ...env(), HOME: home } });
       expect(proc.status).toBe(0);
     }
     const read = (file: string) => JSON.parse(fs.readFileSync(path.join(home, file), "utf8"));
@@ -66,7 +68,7 @@ describe("other agents", () => {
   test("Cursor hooks use conversation ids, workspace roots and follow-up messages", () => {
     approvedPlan();
     const cursor = (event: string, payload: object) => {
-      const proc = run(["bun", HELIX, "hook", event, "cursor"], {
+      const proc = run(["node", HELIX, "hook", event, "cursor"], {
         cwd: scratch, input: JSON.stringify(payload), env: env(),
       });
       expect(proc.status).toBe(0);
@@ -83,13 +85,14 @@ describe("other agents", () => {
     const bin = path.join(scratch, "bin");
     fs.mkdirSync(bin);
     const calls = path.join(scratch, "codex-calls.jsonl");
-    fs.writeFileSync(path.join(bin, "codex"), `#!/usr/bin/env bun
+    fs.writeFileSync(path.join(bin, "codex"), `#!/usr/bin/env node
+const fs = require("node:fs");
 const args = process.argv.slice(2);
-const stdin = await Bun.stdin.text();
-require("node:fs").appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ args, stdin }) + "\\n");
+const stdin = fs.readFileSync(0, "utf8");
+fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ args, stdin }) + "\\n");
 const out = args[args.indexOf("-o") + 1];
 const ui = args.includes("-i");
-await Bun.write(out, JSON.stringify(ui ? ${JSON.stringify(UI_PASS)} : ${JSON.stringify(APPROVE)}));
+fs.writeFileSync(out, JSON.stringify(ui ? ${JSON.stringify(UI_PASS)} : ${JSON.stringify(APPROVE)}));
 `);
     fs.chmodSync(path.join(bin, "codex"), 0o755);
     const configFile = path.join(root, ".helix/config.json");
@@ -100,13 +103,13 @@ await Bun.write(out, JSON.stringify(ui ? ${JSON.stringify(UI_PASS)} : ${JSON.str
     write("app.py", "VALUE = 2\n");
     helix(["gate", "behavior", "order"]);
     const [ref, impl] = screenshots();
-    const proc = run(["bun", HELIX, "gate", "ui", "order", "--pair", ref, impl, "loaded"], {
+    const proc = run(["node", HELIX, "gate", "ui", "order", "--pair", ref, impl, "loaded"], {
       cwd: root, env: { ...env(), PATH: `${bin}:${process.env.PATH}` },
     });
     expect(proc.status).toBe(0);
     const call = JSON.parse(fs.readFileSync(calls, "utf8").trim());
     expect(call.args.filter((a: string) => a === "-i")).toHaveLength(2);
-    expect(call.args.at(-1)).toEndWith("pair-1-implementation.png"); // no prompt after the images
+    expect(call.args.at(-1)).toMatch(/pair-1-implementation\.png$/); // no prompt after the images
     expect(call.stdin).toContain("perfectionist design reviewer");
   });
 

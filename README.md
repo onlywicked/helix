@@ -28,10 +28,10 @@ The skill runs inside the agent you are talking to; it is not a background servi
 | Agent | Skill location | Hooks |
 |---|---|---|
 | Claude Code | `ln -s "$(pwd)" ~/.claude/skills/helix` | armed from `SKILL.md` when the skill runs |
-| Codex | `ln -s "$(pwd)" ~/.agents/skills/helix` | `bun scripts/helix.ts hooks codex`, then trust them in Codex (`/hooks`) |
-| Gemini CLI | `ln -s "$(pwd)" ~/.agents/skills/helix` | `bun scripts/helix.ts hooks gemini` |
-| Cursor | `ln -s "$(pwd)" ~/.agents/skills/helix` | `bun scripts/helix.ts hooks cursor` |
-| GitHub Copilot CLI | `ln -s "$(pwd)" ~/.agents/skills/helix` | `bun scripts/helix.ts hooks copilot` |
+| Codex | `ln -s "$(pwd)" ~/.agents/skills/helix` | `node scripts/helix.mjs hooks codex`, then trust them in Codex (`/hooks`) |
+| Gemini CLI | `ln -s "$(pwd)" ~/.agents/skills/helix` | `node scripts/helix.mjs hooks gemini` |
+| Cursor | `ln -s "$(pwd)" ~/.agents/skills/helix` | `node scripts/helix.mjs hooks cursor` |
+| GitHub Copilot CLI | `ln -s "$(pwd)" ~/.agents/skills/helix` | `node scripts/helix.mjs hooks copilot` |
 | opencode, others | `~/.agents/skills/helix` | none needed: the agent relays your replies with `helix reply` |
 
 Hooks are installed in your user-level agent config, never in the repository. They do nothing outside a Helix run.
@@ -43,7 +43,7 @@ Hooks are installed in your user-level agent config, never in the repository. Th
 
 Requirements:
 
-- [Bun](https://bun.sh), which runs the TypeScript CLI directly with no dependencies
+- [Node.js](https://nodejs.org) 22.18 or later, which runs the TypeScript CLI directly with no dependencies
 - `git`
 - a reviewer CLI: `claude` or `codex` (`helix init` warns when the configured one is missing)
 
@@ -129,6 +129,7 @@ Environment:
 
 ```
 SKILL.md                 orchestrator playbook (+ Claude Code hook declarations)
+scripts/helix.mjs        CLI entry point (caches the compiled CLI)
 scripts/helix.ts         state machine, gates, reviewers, briefs, hooks for every agent, viewer data
 scripts/viewer.html      live viewer
 prompts/                 subagent briefs (planner, test planner, test writer, implementer, fixer)
@@ -137,4 +138,4 @@ tests/                   end-to-end CLI tests (real git repos, fake reviewers, s
                          one file per area, sharing tests/helpers.ts
 ```
 
-Development: run `bun install` (type definitions only), then `bun run check` (strict type-check, then the tests, one worker per test file).
+Development: run `npm install` (type definitions and the tests' `expect`), then `npm run check` (strict type-check, then the tests, one process per test file).

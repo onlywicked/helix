@@ -1,9 +1,10 @@
 // Where Helix keeps its files, and what a team shares.
 
-import { describe, expect, test } from "bun:test";
+import { expect } from "expect";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { approvedPlan, env, git, HELIX, helix, reply, reviewerPrompt, root, run, scratch, useRepo, useRoot, write } from "./helpers";
+import { describe, test } from "node:test";
+import { approvedPlan, env, git, HELIX, helix, reply, reviewerPrompt, root, run, scratch, useRepo, useRoot, write } from "./helpers.ts";
 
 useRepo();
 
@@ -26,7 +27,7 @@ describe("storage", () => {
     const linked = path.join(scratch, "linked");
     git("worktree", "add", "-q", linked, "-b", "feature");
     const inLinked = (args: string[]) => {
-      const proc = run(["bun", HELIX, ...args], { cwd: linked, env: env() });
+      const proc = run(["node", HELIX, ...args], { cwd: linked, env: env() });
       expect(proc.status).toBe(0);
       return proc.stdout + proc.stderr;
     };
@@ -69,7 +70,7 @@ describe("team files", () => {
       approvedPlan({ ui: false, count: 1 });
       write("app.py", "VALUE = 2\n");
       expect(helix(["gate", "behavior", "order"], 2)).toContain("exited 3");
-      expect(fs.readFileSync(path.join(root, ".helix/config.json"), "utf8")).toContain("fake_reviewer.ts");
+      expect(fs.readFileSync(path.join(root, ".helix/config.json"), "utf8")).toContain("fake_reviewer.mjs");
     } finally {
       useRoot(original);
     }
@@ -83,7 +84,7 @@ describe("team files", () => {
     git("worktree", "add", "-q", linked, "-b", "feature");
     write(".helix/learnings.md", fs.readFileSync(path.join(root, ".helix/learnings.md"), "utf8").replace(/^- Old rule\..*\n/m, ""));
     git("commit", "-qam", "drop the old rule");
-    run(["bun", HELIX, "learn", "New rule."], { cwd: linked, env: env() });
+    run(["node", HELIX, "learn", "New rule."], { cwd: linked, env: env() });
     approvedPlan();
     const brief = fs.readFileSync(helix(["brief", "order", "implementer"]).match(/Brief: (.+)/)![1], "utf8");
     expect(brief).toContain("not merged into this branch yet (apply them too):\n  - New rule.");
@@ -101,7 +102,7 @@ describe("team files", () => {
     expect(out).toContain("Moved 2 learnings from");
     expect(fs.existsSync(path.join(root, ".git/helix/config.json"))).toBe(false);
     expect(fs.existsSync(path.join(root, ".git/helix/learnings.md"))).toBe(false);
-    expect(fs.readFileSync(path.join(root, ".helix/config.json"), "utf8")).toContain("fake_reviewer.ts");
+    expect(fs.readFileSync(path.join(root, ".helix/config.json"), "utf8")).toContain("fake_reviewer.mjs");
     expect(fs.readFileSync(path.join(root, ".helix/learnings.md"), "utf8")).toContain("- Titles are semibold.");
   });
 });

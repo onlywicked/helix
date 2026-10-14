@@ -1,9 +1,10 @@
 // The behavior and UI gates, staleness and waivers.
 
-import { describe, expect, test } from "bun:test";
+import { expect } from "expect";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { approvedPlan, git, helix, reply, root, screenshots, setVerdicts, state, UI_FAIL, UI_INVALID, UI_PASS, useRepo, verdicts, write } from "./helpers";
+import { describe, test } from "node:test";
+import { approvedPlan, git, helix, reply, root, screenshots, setVerdicts, state, UI_FAIL, UI_INVALID, UI_PASS, useRepo, verdicts, write } from "./helpers.ts";
 
 useRepo();
 

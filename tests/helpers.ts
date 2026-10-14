@@ -1,21 +1,23 @@
 // Shared setup for the end-to-end tests of the Helix CLI: real git repos, real
 // subprocesses, fake reviewers through the `exec` backend, and simulated hook
-// events. Each test file runs in its own worker (`bun test --parallel`).
+// events. Each test file runs in its own process (`node --test`).
 
-import { afterEach, beforeEach, expect } from "bun:test";
+import { expect } from "expect";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { afterEach, beforeEach } from "node:test";
 import { deflateSync } from "node:zlib";
 
-export const HELIX = path.resolve(import.meta.dir, "..", "scripts", "helix.ts");
+export const HELIX = path.resolve(import.meta.dirname, "..", "scripts", "helix.mjs");
 export const SESSION = "session-under-test";
 
 export const FAKE_REVIEWER = `
-const prompt = await Bun.stdin.text();
-const kind = (await Bun.file(process.env.HELIX_SCHEMA_FILE).text()).includes("invalid_reason") ? "ui" : "code";
-const verdicts = JSON.parse(await Bun.file(process.env.FAKE_VERDICTS).text())[kind];
+import { readFileSync } from "node:fs";
+const prompt = readFileSync(0, "utf8");
+const kind = readFileSync(process.env.HELIX_SCHEMA_FILE, "utf8").includes("invalid_reason") ? "ui" : "code";
+const verdicts = JSON.parse(readFileSync(process.env.FAKE_VERDICTS, "utf8"))[kind];
 if (kind === "code") {
   const lens = prompt.split("## Lenses")[0].includes("**architecture**") ? "architecture" : "correctness";
   console.log(JSON.stringify(verdicts[lens]));
@@ -75,26 +77,8 @@ export let root: string;
 export let scratch: string;
 export let verdicts: string;
 
-/**
- * Runs a command to completion with its output captured in temp files, not
- * pipes: under load, Bun's synchronous spawn can drop a fast child's piped
- * output and still report exit 0 (https://github.com/oven-sh/bun/issues/34069).
- */
 export function run(command: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "helix-run-"));
-  try {
-    const [stdin, stdout, stderr] = ["stdin", "stdout", "stderr"].map((name) => path.join(dir, name));
-    fs.writeFileSync(stdin, opts.input ?? "");
-    const fds = [fs.openSync(stdin, "r"), fs.openSync(stdout, "w"), fs.openSync(stderr, "w")];
-    try {
-      const proc = spawnSync(command[0], command.slice(1), { cwd: opts.cwd, env: opts.env, stdio: fds });
-      return { status: proc.status, stdout: fs.readFileSync(stdout, "utf8"), stderr: fs.readFileSync(stderr, "utf8") };
-    } finally {
-      fds.forEach((fd) => fs.closeSync(fd));
-    }
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  return spawnSync(command[0], command.slice(1), { cwd: opts.cwd, env: opts.env, input: opts.input ?? "", encoding: "utf8" });
 }
 
 export function git(...args: string[]) {
@@ -109,7 +93,7 @@ export function env(session = SESSION) {
 }
 
 export function helix(args: string[], expectCode = 0, session = SESSION): string {
-  const proc = run(["bun", HELIX, ...args], { cwd: root, env: env(session) });
+  const proc = run(["node", HELIX, ...args], { cwd: root, env: env(session) });
   if (proc.status !== expectCode) {
     throw new Error(`helix ${args.join(" ")} exited ${proc.status}, expected ${expectCode}\n` +
       `stdout:\n${proc.stdout}\nstderr:\n${proc.stderr}`);
@@ -118,7 +102,7 @@ export function helix(args: string[], expectCode = 0, session = SESSION): string
 }
 
 export function hook(event: string, payload: unknown, cwd = root, input = JSON.stringify(payload)) {
-  const proc = run(["bun", HELIX, "hook", event], { cwd, input, env: env() });
+  const proc = run(["node", HELIX, "hook", event], { cwd, input, env: env() });
   expect(proc.status).toBe(0);
   return proc.stdout.trim() ? JSON.parse(proc.stdout) : null;
 }
@@ -218,12 +202,12 @@ export function useRepo() {
     write("docs/architecture.md", "# Layers\nUI -> service -> storage\n");
     write("app.py", "VALUE = 1\n");
     write("test.sh", "#!/bin/sh\ngrep -q 'VALUE = 2' app.py\n");
-    write("fake_reviewer.ts", FAKE_REVIEWER);
+    write("fake_reviewer.mjs", FAKE_REVIEWER);
     setVerdicts({ ui: UI_PASS, architecture: APPROVE, correctness: APPROVE });
     helix(["init", "--test-command", "sh test.sh", "--guideline", "docs/architecture.md"]);
     const configFile = path.join(root, ".helix/config.json");
     const config = JSON.parse(fs.readFileSync(configFile, "utf8"));
-    const fake = { backend: "exec", command: ["bun", "fake_reviewer.ts"] };
+    const fake = { backend: "exec", command: ["node", "fake_reviewer.mjs"] };
     config.reviewers = { ui: fake, code: [{ ...fake, lens: "architecture" }, { ...fake, lens: "correctness" }], timeout_seconds: 60 };
     fs.writeFileSync(configFile, JSON.stringify(config));
     git("add", "-A");

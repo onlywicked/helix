@@ -1,9 +1,10 @@
 // The adversarial review gate and its tracked findings.
 
-import { describe, expect, test } from "bun:test";
+import { expect } from "expect";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { answer, APPROVE, approvedPlan, finding, fixerBrief, gatesBeforeReview, helix, REJECT, reply, reviewerPrompt, root, screenshots, setVerdicts, state, useRepo, write } from "./helpers";
+import { describe, test } from "node:test";
+import { answer, APPROVE, approvedPlan, finding, fixerBrief, gatesBeforeReview, helix, REJECT, reply, reviewerPrompt, root, screenshots, setVerdicts, state, useRepo, write } from "./helpers.ts";
 
 useRepo();
 

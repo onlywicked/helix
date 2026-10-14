@@ -5,11 +5,11 @@ hooks:
   Stop:
     - hooks:
         - type: command
-          command: "bun \"${CLAUDE_PLUGIN_ROOT}/scripts/helix.ts\" hook stop || true"
+          command: "node \"${CLAUDE_PLUGIN_ROOT}/scripts/helix.mjs\" hook stop || true"
   UserPromptSubmit:
     - hooks:
         - type: command
-          command: "bun \"${CLAUDE_PLUGIN_ROOT}/scripts/helix.ts\" hook prompt || true"
+          command: "node \"${CLAUDE_PLUGIN_ROOT}/scripts/helix.mjs\" hook prompt || true"
 ---
 
 # Helix
@@ -30,7 +30,7 @@ You are the **orchestrator**, working in the engineer's own session: they see yo
 The Helix CLI owns all state and produces every verdict. Run it with the full path to this skill's directory (the directory containing this SKILL.md; Claude Code calls it `${CLAUDE_SKILL_DIR}`):
 
 ```
-bun "<skill dir>/scripts/helix.ts" <command>      # written `helix` below
+node "<skill dir>/scripts/helix.mjs" <command>     # written `helix` below
 ```
 
 - Pass the engineer's words in **single quotes** (``--goal 'Port the `cart` module'``, writing `'\''` for a literal `'`). Inside double quotes the shell would run backticks and `$(...)` from their text.
