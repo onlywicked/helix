@@ -16,6 +16,13 @@ export const REPO = fileURLToPath(new URL("..", import.meta.url));
 export const HELIX = path.join(REPO, "plugins", "helix", "skills", "helix", "scripts", "helix.mjs");
 export const SESSION = "session-under-test";
 
+// Every git the tests start, directly or through Helix, ignores this machine's git config and commits as
+// the same tester, so a run here behaves like one in CI.
+Object.assign(process.env, {
+  GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: "1",
+  GIT_AUTHOR_NAME: "Tester", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "Tester", GIT_COMMITTER_EMAIL: "t@example.com",
+});
+
 export const FAKE_REVIEWER = `
 import { readFileSync } from "node:fs";
 const prompt = readFileSync(0, "utf8");
@@ -232,8 +239,6 @@ export function useRepo() {
     scratch = fs.mkdtempSync(path.join(os.tmpdir(), "helix-scratch-"));
     verdicts = path.join(scratch, "verdicts.json");
     git("init", "-q");
-    git("config", "user.email", "t@example.com");
-    git("config", "user.name", "Tester");
     fs.mkdirSync(path.join(root, "docs"));
     write("docs/architecture.md", "# Layers\nUI -> service -> storage\n");
     write("app.py", "VALUE = 1\n");
