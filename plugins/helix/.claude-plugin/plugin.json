@@ -1,7 +1,16 @@
 {
   "name": "helix",
+  "version": "0.1.0",
   "description": "Checkpoint-and-gate development: small checkpoints, each held until its behavior tests, UI review, two adversarial code reviews and the engineer all pass.",
-  "author": { "name": "Arman" },
+  "author": {
+    "name": "Arman"
+  },
   "license": "MIT",
-  "keywords": ["agents", "migration", "code-review", "testing", "workflow"]
+  "keywords": [
+    "agents",
+    "migration",
+    "code-review",
+    "testing",
+    "workflow"
+  ]
 }
