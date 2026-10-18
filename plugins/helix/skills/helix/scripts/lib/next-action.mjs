@@ -43,8 +43,9 @@ export function nextAction(run, root = null, config = null) {
   const replied = awaiting?.replies.at(-1);
   if (awaiting && replied && awaiting.kind !== "input") {
     const subject = { plan: "the plan", checkpoint: `checkpoint ${awaiting.cp}`, final: "the finished feature" }[awaiting.kind];
+    const approve = awaiting.kind === "final" ? `helix approve ${rid} --message '<subject>'` : `helix approve ${rid}`;
     return (`The engineer replied about ${subject}: "${replied.text.slice(0, 300)}". If they approve it, run ` +
-      `\`helix approve ${rid}\`; if they ask for changes, \`helix feedback ${rid} --text '<their words>'\` ` +
+      `\`${approve}\`; if they ask for changes, \`helix feedback ${rid} --text '<their words>'\` ` +
       "(add --learning for a lasting rule). Then carry out anything else they asked for, such as autonomy.");
   }
   const relay = relayHint(run);
@@ -82,7 +83,7 @@ export function nextAction(run, root = null, config = null) {
           "(it re-opens the run).");
       }
       return ("STOP. All checkpoints are committed. Ask the engineer to test the whole feature. If they accept it, " +
-        `run \`helix approve ${rid}\`; otherwise \`helix feedback ${rid} --text ...\`.${relay}`);
+        `run \`helix approve ${rid} --message '<subject>'\`; otherwise \`helix feedback ${rid} --text ...\`.${relay}`);
   }
   const cp = currentCp(run);
   if (!cp) return `No current checkpoint. Run \`helix status ${rid}\`.`;
@@ -151,5 +152,5 @@ export function nextAction(run, root = null, config = null) {
     }
     return `${cp.id}: automated gates passed. Run \`helix request-approval ${rid}\`.`;
   }
-  return `${cp.id}: all gates passed. Run \`helix commit ${rid}\`.`;
+  return `${cp.id}: all gates passed. Run \`helix commit ${rid} --message '<subject>'\`.`;
 }

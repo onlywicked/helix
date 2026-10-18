@@ -145,7 +145,7 @@ describe("agents without a prompt hook", () => {
     helix(["request-approval", "order"], 0, AGENT);
     helix(["reply", "order", "--text", "ship it"], 0, AGENT);
     helix(["approve", "order"], 0, AGENT);
-    helix(["commit", "order"], 0, AGENT);
+    helix(["commit", "order", "--message", "feat: step"], 0, AGENT);
     expect(git("log", "-1", "--format=%B")).toContain("- human: approved by the engineer, relayed by the agent");
   });
 

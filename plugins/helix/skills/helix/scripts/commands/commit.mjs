@@ -14,8 +14,22 @@ import { evidenceDir, requireCurrent, transaction, writeSharedRun } from "../lib
 /** @param {Checkpoint} cp @param {Gate} gate */
 const passedRecord = (cp, gate) => /** @type {GateRecord} */ (cp.gates[gate]);
 
+/**
+ * The commit's subject line, which the agent writes in the repository's commit style.
+ * @param {Args} args
+ */
+export function subjectLine(args) {
+  const subject = String(args.message ?? "").trim();
+  if (!subject || subject.includes("\n")) {
+    throw new HelixError("--message must be one line: the commit's subject, in the repository's commit style " +
+      "(see `git log`). Helix writes the body.");
+  }
+  return subject;
+}
+
 /** @param {Args} args */
 export function cmdCommit(args) {
+  const subject = subjectLine(args);
   const root = repoRoot();
   const config = loadConfig(root);
   const fp = fingerprint(root);
@@ -38,7 +52,7 @@ export function cmdCommit(args) {
     cp.status = "committed";
     cp.committed_at = now();
     cp.tree = fp;
-    const sections = [`helix(${run.id}): ${cp.id} ${cp.title}`, cp.summary,
+    const sections = [subject, `Helix run ${run.id}, ${cp.id}: ${cp.title}`, cp.summary,
       `Gates:\n${gates.map((g) => gateLine(cp, g, passedRecord(cp, g))).join("\n")}`];
     if (cp.feedback.length) sections.push(`Engineer feedback:\n${bullet(cp.feedback.map((f) => `"${oneLine(f.text)}"`))}`);
     const rulings = (cp.findings ?? []).flatMap((f) => (f.ruling ? [{ f, ruling: f.ruling }] : []));
@@ -80,13 +94,14 @@ export function cmdCommit(args) {
  * Returns that commit, or null when the run file was never committed.
  * @param {string} root
  * @param {string} runId
+ * @param {string} subject
  */
-export function closeSharedRun(root, runId) {
+export function closeSharedRun(root, runId, subject) {
   const file = path.relative(root, sharedRunPath(root, runId));
   if (sh(["git", "ls-files", "--error-unmatch", "--", file], root, { check: false }).status !== 0) return null;
   git(root, ["rm", "-q", "--", file]);
   try {
-    git(root, ["commit", "-q", "-m", `helix(${runId}): close the run\n\nThe engineer accepted the feature.\n`, "--", file]);
+    git(root, ["commit", "-q", "-m", `${subject}\n\nHelix run ${runId}: the engineer accepted the feature.\n`, "--", file]);
   } catch (error) {
     git(root, ["reset", "-q", "--", file]);
     git(root, ["checkout", "-q", "--", file]);

@@ -198,7 +198,7 @@ describe("adversarial review", () => {
     helix(["request-approval", "order"]);
     reply("approved");
     helix(["approve", "order"]);
-    helix(["commit", "order"]);
+    helix(["commit", "order", "--message", "feat: step"]);
     for (const role of ["implementer", "test-writer"]) {
       const brief = fs.readFileSync(briefFile(helix(["brief", "order", role])), "utf8");
       expect(brief).toContain("## Review findings fixed in earlier checkpoints");

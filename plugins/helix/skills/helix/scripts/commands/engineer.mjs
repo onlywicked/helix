@@ -10,7 +10,7 @@ import { NO_HOOK_HINT, nextAction, relayHint } from "../lib/next-action.mjs";
 import { dirtyFiles, fingerprint, head, repoRoot, runDir, sessionId } from "../lib/repo.mjs";
 import { advance, cpById, lastReply, logAttempt, recordReply, requiredGates } from "../lib/state.mjs";
 import { allRunIds, committedCount, loadRun, pickUpRun, requireCurrent, runsToPickUp, transaction } from "../lib/store.mjs";
-import { closeSharedRun, gateLine } from "./commit.mjs";
+import { closeSharedRun, gateLine, subjectLine } from "./commit.mjs";
 import { ensurePriorGates } from "./gates.mjs";
 
 /** @import { Args, Awaiting, Checkpoint, Feedback, GateRecord, Ruling, Run } from "../lib/types.js" */
@@ -35,11 +35,15 @@ export function cmdApprove(args) {
   const { run } = transaction(root, args._[0], (run) => {
     const awaiting = requireHumanReply(run, ["plan", "checkpoint", "final"]);
     const { text: reply, via } = lastReply(awaiting);
+    if (awaiting.kind !== "final" && args.message !== undefined) {
+      throw new HelixError("--message is only for accepting the finished feature.");
+    }
     if (awaiting.kind === "final") {
+      const subject = subjectLine(args);
       run.awaiting = null;
       run.accepted_at = now();
       run.history.push({ at: now(), event: "the engineer accepted the feature", reply });
-      const closed = closeSharedRun(root, run.id);
+      const closed = closeSharedRun(root, run.id, subject);
       if (closed) run.history.push({ at: now(), event: `run file removed from the branch in ${closed.slice(0, 10)}` });
     } else if (awaiting.kind === "plan") {
       const dirty = dirtyFiles(root);

@@ -51,7 +51,11 @@ const COMMANDS = {
     help: "hand a checkpoint whose automated gates passed to the engineer", usage: `request-approval ${RUN}`,
     positionals: 1, run: cmdRequestApproval,
   },
-  approve: { help: "record the engineer's approval (plan or checkpoint)", usage: `approve ${RUN}`, positionals: 1, run: cmdApprove },
+  approve: {
+    help: "record the engineer's approval (plan, checkpoint or finished feature)",
+    usage: `approve ${RUN} [--message SUBJECT]  (--message: the subject of the commit that closes the run, when accepting the feature)`,
+    positionals: 1, flags: { message: "string" }, run: cmdApprove,
+  },
   feedback: {
     help: "record the engineer's feedback (plan, checkpoint or final review)",
     usage: `feedback ${RUN} --text TEXT [--learning TEXT]`,
@@ -59,8 +63,8 @@ const COMMANDS = {
   },
   commit: {
     help: "commit the current checkpoint (all gates must pass on this exact tree)",
-    usage: `commit ${RUN} [--trailer 'Key: value']...`,
-    positionals: 1, flags: { trailer: "repeat" }, run: cmdCommit,
+    usage: `commit ${RUN} --message SUBJECT [--trailer 'Key: value']...`,
+    positionals: 1, flags: { message: "string", trailer: "repeat" }, required: ["message"], run: cmdCommit,
   },
   add: {
     help: "append checkpoints to an approved run (e.g. from engineer feedback)", usage: `add ${RUN} --file FILE`,

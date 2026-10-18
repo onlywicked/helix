@@ -153,7 +153,8 @@ The config and learnings live in `.helix/` and are committed with the code; a le
      - `--text` is their words, verbatim. `--learning` is your one-line generalization of them, written so it applies to future checkpoints and not just this one.
      - If the feedback changes what the checkpoint should do, re-plan its test cases first: `helix brief <run> test-planner --checkpoint <id>`, then `helix tests`.
      - If the feedback also applies to code from earlier checkpoints, the fix goes into the current checkpoint. Its reviewers see it in the diff.
-6. `helix commit <run>` commits the checkpoint, together with the run's progress, archives its evidence, and starts the next one.
+6. `helix commit <run> --message '<subject>'` commits the checkpoint, together with the run's progress, archives its evidence, and starts the next one.
+   - Write the subject in the repository's commit style (see `git log`), describing what the checkpoint changes. Helix writes the body: the checkpoint, its summary and what each gate proved.
    - If your harness or the engineer requires commit trailers, add `--trailer 'Key: value'` (repeatable).
    - If a git commit hook rewrites files, Helix undoes the commit. Rerun the gates on the hook's changes and commit again.
 
@@ -168,7 +169,7 @@ When the last checkpoint is committed, the run is `done`. Ask the engineer to te
 
 Then **stop**. When they reply (without a prompt hook, relay it first with `helix reply`):
 
-- If they accept it: `helix approve <run>`. The run is finished, and Helix removes its run file from the branch in a commit of its own.
+- If they accept it: `helix approve <run> --message '<subject>'`. The run is finished, and Helix removes its run file from the branch in a commit of its own, with that subject in the repository's commit style.
 - Otherwise:
   1. `helix feedback <run> --text '<their words>'`.
   2. Dispatch the `planner`; its brief now asks for new checkpoints.

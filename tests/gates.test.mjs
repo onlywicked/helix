@@ -99,7 +99,7 @@ describe("gates", () => {
     helix(["request-approval", "order"]);
     reply("ok");
     helix(["approve", "order"]);
-    helix(["commit", "order"]);
+    helix(["commit", "order", "--message", "feat: step"]);
     expect(git("log", "-1", "--format=%B")).toContain("ui: waived by the engineer (no simulator available; Jest covers it)");
   });
 

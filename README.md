@@ -24,7 +24,7 @@ Ask an agent to migrate a screen or rebuild a feature in one go and it hands bac
 3. **Adversarial review**: two independent, context-isolated reviewers check the checkpoint's diff against your written guidelines. Any finding blocks.
 4. **Engineer**: you approve or give feedback. You can grant autonomy for N checkpoints or for the whole run.
 
-Every checkpoint ends in a commit whose message records what each gate proved. The evidence (test logs, UI reviews with screenshots, reviewer verdicts and findings) is shown in the viewer and archived by commit hash, so it outlives the worktree.
+Every checkpoint ends in a commit with a subject in your repository's commit style and a body that records what each gate proved. The evidence (test logs, UI reviews with screenshots, reviewer verdicts and findings) is shown in the viewer and archived by commit hash, so it outlives the worktree.
 
 **Rules the agent cannot argue with**
 
@@ -148,7 +148,7 @@ helix claim <run>     # takes one over from its last checkpoint commit
 
 The run continues with the next checkpoint, in your session. Briefs are rebuilt on your machine from the run, so they carry your paths and the latest learnings. Evidence (test logs, screenshots, reviewer output) stays on the machine that produced it; the commit messages record what each gate proved. Handing back works the same way: once you have committed more checkpoints, the original engineer pulls and claims the run again.
 
-A run has one owner at a time; two people building the same run in parallel would mean two branches, and so two runs. When the engineer accepts the finished feature, Helix removes the run file in a commit of its own (`helix(<run>): close the run`), so it never reaches `main`. History keeps it.
+A run has one owner at a time; two people building the same run in parallel would mean two branches, and so two runs. When the engineer accepts the finished feature, Helix removes the run file in a commit of its own, so it never reaches `main`. History keeps it.
 
 ## Requirements
 

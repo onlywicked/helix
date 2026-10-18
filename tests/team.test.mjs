@@ -56,7 +56,7 @@ describe("team files", () => {
     helix(["request-approval", "order"]);
     reply("ship it");
     helix(["approve", "order"]);
-    helix(["commit", "order"]);
+    helix(["commit", "order", "--message", "feat: step"]);
     expect(git("show", "--name-only", "--format=", "HEAD").split("\n")).toContain(".helix/learnings.md");
     expect(git("status", "--porcelain")).toBe("");
   });
@@ -126,7 +126,7 @@ describe("handing a run over", () => {
     helix(["request-approval", "order"], 0, session);
     reply("ship it", session);
     helix(["approve", "order"], 0, session);
-    helix(["commit", "order"], 0, session);
+    helix(["commit", "order", "--message", "feat: step"], 0, session);
   }
 
   test("a teammate picks a run up from the branch, and it comes back once they committed more", () => {
@@ -167,8 +167,8 @@ describe("handing a run over", () => {
     write("notes.txt", "unrelated\n");
     git("add", "notes.txt");
     reply("accepted, thanks");
-    expect(helix(["approve", "order"])).toContain("The feature is accepted.");
-    expect(git("log", "-1", "--format=%s")).toBe("helix(order): close the run\n");
+    expect(helix(["approve", "order", "--message", "chore: close the order run"])).toContain("The feature is accepted.");
+    expect(git("log", "-1", "--format=%B")).toBe("chore: close the order run\n\nHelix run order: the engineer accepted the feature.\n\n");
     expect(git("show", "--name-only", "--format=", "HEAD").trim()).toBe(".helix/runs/order.json");
     expect(fs.existsSync(path.join(root, ".helix/runs/order.json"))).toBe(false);
     expect(git("status", "--porcelain")).toBe("A  notes.txt\n"); // the engineer's staged work is left alone

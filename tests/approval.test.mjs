@@ -12,7 +12,7 @@ describe("approval and commit", () => {
   test("full checkpoint cycle commits with evidence", () => {
     approvedPlan();
     passAllGates();
-    expect(helix(["commit", "order"], 1)).toContain("human gate is pending");
+    expect(helix(["commit", "order", "--message", "feat: step"], 1)).toContain("human gate is pending");
     const requested = helix(["request-approval", "order"]);
     expect(requested).toContain("- behavior: passed (1 run, never sent back): 1 planned case via `sh test.sh`");
     expect(requested).toContain("- review: passed (1 run, never sent back): every reviewer approved");
@@ -21,11 +21,14 @@ describe("approval and commit", () => {
     expect(helix(["approve", "order"], 1)).toContain("No engineer reply");
     reply("ship it");
     expect(helix(["status", "order"])).toContain('The engineer replied about checkpoint cp-1: "ship it"');
+    expect(helix(["approve", "order", "--message", "feat: x"], 1)).toContain("only for accepting the finished feature");
     helix(["approve", "order"]);
-    helix(["commit", "order", "--trailer", "Reviewed-by: Engineer <e@example.com>"]);
+    expect(helix(["commit", "order"], 1)).toContain("--message is required");
+    expect(helix(["commit", "order", "--message", "feat: x\n\nbody"], 1)).toContain("--message must be one line");
+    helix(["commit", "order", "--message", "feat(order): show the total", "--trailer", "Reviewed-by: Engineer <e@example.com>"]);
     const message = git("log", "-1", "--format=%B");
     expect(message).toContain("Reviewed-by: Engineer <e@example.com>");
-    expect(message).toContain("helix(order): cp-1 Step 1");
+    expect(message).toMatch(/^feat\(order\): show the total\n\nHelix run order, cp-1: Step 1\n\nBuild step 1\.\n/);
     expect(message).toContain("- human: approved by the engineer");
     expect(message).toContain("- behavior: passed (1 run, never sent back): 1 planned case via `sh test.sh`");
     expect(message).toContain("- ui: passed (1 run, never sent back): 1 screen matches the reference");
@@ -88,7 +91,7 @@ describe("approval and commit", () => {
     helix(["autonomy", "order", "--checkpoints", "1"]);
     passAllGates();
     expect(helix(["request-approval", "order"])).toContain("autonomous mode approved");
-    helix(["commit", "order"]);
+    helix(["commit", "order", "--message", "feat: step"]);
     const s = state();
     expect(s.autonomy.remaining).toBe(0);
     expect(s.checkpoints[0].gates.human.reply).toBe("do the next checkpoint without asking me");
@@ -102,7 +105,7 @@ describe("approval and commit", () => {
     helix(["request-approval", "order"]);
     reply("ok");
     helix(["approve", "order"]);
-    helix(["commit", "order"]);
+    helix(["commit", "order", "--message", "feat: step"]);
     expect(state().status).toBe("done");
     expect(stop()).toBeNull();
     reply("the empty state is missing");
@@ -123,10 +126,11 @@ describe("finishing", () => {
     helix(["request-approval", "order"]);
     reply("ok");
     helix(["approve", "order"]);
-    helix(["commit", "order"]);
+    helix(["commit", "order", "--message", "feat: step"]);
     expect(helix(["status", "order"])).toContain("test the whole feature");
     expect(reply("tested it all, it works").hookSpecificOutput.additionalContext).toContain("helix approve order");
-    expect(helix(["approve", "order"])).toContain("accepted");
+    expect(helix(["approve", "order"], 1)).toContain("--message must be one line");
+    expect(helix(["approve", "order", "--message", "chore: close the order run"])).toContain("accepted");
     expect(reply("thanks")).toBeNull();
   });
 
@@ -142,7 +146,7 @@ describe("finishing", () => {
     reply("ok");
     helix(["approve", "order"]);
     const before = git("rev-parse", "HEAD");
-    expect(helix(["commit", "order"], 1)).toContain("commit hook changed the files");
+    expect(helix(["commit", "order", "--message", "feat: step"], 1)).toContain("commit hook changed the files");
     expect(git("rev-parse", "HEAD")).toBe(before);
     expect(fs.readFileSync(path.join(root, "app.py"), "utf8")).toContain("# fmt");
     helix(["gate", "behavior", "order"]);
@@ -150,7 +154,7 @@ describe("finishing", () => {
     helix(["request-approval", "order"]);
     reply("ok again");
     helix(["approve", "order"]);
-    helix(["commit", "order"]);
+    helix(["commit", "order", "--message", "feat: step"]);
     expect(git("show", "HEAD:app.py")).toContain("# fmt");
   });
 });
