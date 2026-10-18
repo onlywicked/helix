@@ -4,7 +4,7 @@ import { expect } from "expect";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, test } from "node:test";
-import { approvedPlan, git, helix, reply, root, screenshots, setVerdicts, state, UI_FAIL, UI_INVALID, UI_PASS, useRepo, verdicts, write } from "./helpers.ts";
+import { approvedPlan, briefFile, found, git, helix, reply, root, screenshots, setVerdicts, state, UI_FAIL, UI_INVALID, UI_PASS, useRepo, verdicts, write } from "./helpers.mjs";
 
 useRepo();
 
@@ -25,8 +25,8 @@ describe("gates", () => {
     write("test.sh", "#!/bin/sh\ndate > coverage.out\n");
     expect(helix(["gate", "behavior", "order"], 2)).toContain("modified the working tree");
     expect(helix(["status", "order"])).toContain("helix brief order fixer");
-    const file = helix(["brief", "order", "fixer"]).match(/Brief: (.+)/)![1];
-    const log = fs.readFileSync(file, "utf8").match(/Behavior log \(attempt 1\): (\S+)/)![1];
+    const file = briefFile(helix(["brief", "order", "fixer"]));
+    const log = found(fs.readFileSync(file, "utf8"), /Behavior log \(attempt 1\): (\S+)/);
     expect(fs.readFileSync(log, "utf8")).toContain("GATE FAILED: the test run modified the working tree");
     expect(fs.readFileSync(log, "utf8")).toContain("coverage.out");
   });

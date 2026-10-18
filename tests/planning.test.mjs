@@ -4,7 +4,7 @@ import { expect } from "expect";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, test } from "node:test";
-import { approvedPlan, helix, input, plan, reply, root, state, useRepo, write } from "./helpers.ts";
+import { approvedPlan, briefFile, helix, input, plan, reply, root, state, useRepo, write } from "./helpers.mjs";
 
 useRepo();
 
@@ -29,7 +29,7 @@ describe("planning", () => {
     const cps = { checkpoints: [{ title: "Skeleton", summary: "s", done_when: ["x"], ui: false }],
       decisions: ["The reference rounds half down; keep that?"] };
     expect(helix(["plan", "order", "--file", input("cps.json", cps)])).toContain("rounds half down");
-    const brief = fs.readFileSync(helix(["brief", "order", "test-planner"]).match(/Brief: (.+)/)![1], "utf8");
+    const brief = fs.readFileSync(briefFile(helix(["brief", "order", "test-planner"])), "utf8");
     expect(brief).toContain("Decisions the engineer has not settled yet");
     expect(brief).toContain("rounds half down");
     // A bare file name is read from the run's work dir, where the brief told the subagent to write.
@@ -83,7 +83,7 @@ describe("planning", () => {
   test("re-planning one checkpoint's tests after the engineer changes it", () => {
     approvedPlan();
     expect(helix(["brief", "order", "test-planner"], 1)).toContain("--checkpoint");
-    const file = helix(["brief", "order", "test-planner", "--checkpoint", "cp-1"]).match(/Brief: (.+)/)![1];
+    const file = briefFile(helix(["brief", "order", "test-planner", "--checkpoint", "cp-1"]));
     expect(fs.readFileSync(file, "utf8")).toContain("Re-plan cp-1");
   });
 

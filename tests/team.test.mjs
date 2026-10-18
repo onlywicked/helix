@@ -4,7 +4,7 @@ import { expect } from "expect";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, test } from "node:test";
-import { approvedPlan, env, git, HELIX, helix, reply, reviewerPrompt, root, run, scratch, useRepo, useRoot, write } from "./helpers.ts";
+import { approvedPlan, briefFile, env, git, HELIX, helix, reply, reviewerPrompt, root, run, scratch, useRepo, useRoot, write } from "./helpers.mjs";
 
 useRepo();
 
@@ -26,7 +26,7 @@ describe("storage", () => {
     helix(["new", "order", "--goal", "g", "--reference", "r"]);
     const linked = path.join(scratch, "linked");
     git("worktree", "add", "-q", linked, "-b", "feature");
-    const inLinked = (args: string[]) => {
+    const inLinked = (/** @type {string[]} */ args) => {
       const proc = run(["node", HELIX, ...args], { cwd: linked, env: env() });
       expect(proc.status).toBe(0);
       return proc.stdout + proc.stderr;
@@ -86,7 +86,7 @@ describe("team files", () => {
     git("commit", "-qam", "drop the old rule");
     run(["node", HELIX, "learn", "New rule."], { cwd: linked, env: env() });
     approvedPlan();
-    const brief = fs.readFileSync(helix(["brief", "order", "implementer"]).match(/Brief: (.+)/)![1], "utf8");
+    const brief = fs.readFileSync(briefFile(helix(["brief", "order", "implementer"])), "utf8");
     expect(brief).toContain("not merged into this branch yet (apply them too):\n  - New rule.");
     expect(brief).not.toContain("Old rule.");
   });
@@ -99,7 +99,7 @@ describe("team files", () => {
     expect(helix(["status"], 1)).toContain("Run `helix init` once to move them there");
     const out = helix(["init"]);
     expect(out).toContain("Moved your config from");
-    expect(out).toContain("Moved 2 learnings from");
+    expect(out).toContain("Moved 1 learning from");
     expect(fs.existsSync(path.join(root, ".git/helix/config.json"))).toBe(false);
     expect(fs.existsSync(path.join(root, ".git/helix/learnings.md"))).toBe(false);
     expect(fs.readFileSync(path.join(root, ".helix/config.json"), "utf8")).toContain("fake_reviewer.mjs");

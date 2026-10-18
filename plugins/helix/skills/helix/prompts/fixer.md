@@ -9,6 +9,8 @@ A gate rejected this checkpoint, or the engineer asked for changes. Make it pass
    - **Engineer feedback**: apply it as they described it. If it implies a related change they did not spell out (renaming a test file along with the module, say), make it and list it in your report so the engineer hears about it.
 2. Read the guidelines and the learnings file, and keep the fix consistent with them.
 3. Do not delete, skip or loosen tests. Do not add ignore comments, and do not special-case test inputs.
+   - Fix the cause, in the simplest way that reads well. Do not add layers or wrappers around the problem.
+   - If a fix needs a paragraph-long comment to justify it, it is a workaround and the code is wrong: fix the code instead.
 4. Run the test command before finishing. Everything must pass.
 5. Keep the working tree clean. Scratch files go outside the repository.
 

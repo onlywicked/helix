@@ -1,0 +1,12 @@
+{
+  "name": "helix",
+  "owner": { "name": "Arman" },
+  "description": "Helix: checkpoint-and-gate development for coding agents.",
+  "plugins": [
+    {
+      "name": "helix",
+      "source": "./plugins/helix",
+      "description": "Checkpoint-and-gate development: small checkpoints, each held until its behavior tests, UI review, two adversarial code reviews and the engineer all pass."
+    }
+  ]
+}

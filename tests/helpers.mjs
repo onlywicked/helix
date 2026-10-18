@@ -10,15 +10,18 @@ import * as path from "node:path";
 import { afterEach, beforeEach } from "node:test";
 import { deflateSync } from "node:zlib";
 
-export const HELIX = path.resolve(import.meta.dirname, "..", "scripts", "helix.mjs");
+export const HELIX = path.resolve(import.meta.dirname, "..", "plugins", "helix", "skills", "helix", "scripts", "helix.mjs");
 export const SESSION = "session-under-test";
 
 export const FAKE_REVIEWER = `
 import { readFileSync } from "node:fs";
 const prompt = readFileSync(0, "utf8");
-const kind = readFileSync(process.env.HELIX_SCHEMA_FILE, "utf8").includes("invalid_reason") ? "ui" : "code";
+const schema = readFileSync(process.env.HELIX_SCHEMA_FILE, "utf8");
+const kind = schema.includes("invalid_reason") ? "ui" : schema.includes('"matches"') ? "matcher" : "code";
 const verdicts = JSON.parse(readFileSync(process.env.FAKE_VERDICTS, "utf8"))[kind];
-if (kind === "code") {
+if (kind === "matcher") {
+  console.log(JSON.stringify(verdicts ?? { matches: [] }));
+} else if (kind === "code") {
   const lens = prompt.split("## Lenses")[0].includes("**architecture**") ? "architecture" : "correctness";
   console.log(JSON.stringify(verdicts[lens]));
 } else {
@@ -42,7 +45,8 @@ export const UI_FAIL = {
 };
 export const UI_INVALID = { verdict: "INVALID", invalid_reason: "reference shows a fulfilled order", findings: [], out_of_scope_notes: [] };
 
-export function png(file: string, w: number, h: number) {
+/** @param {string} file @param {number} w @param {number} h */
+export function png(file, w, h) {
   const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(w * 3, 0xff)]);
   const raw = Buffer.concat(Array.from({ length: h }, () => row));
   const crcTable = Array.from({ length: 256 }, (_, n) => {
@@ -50,12 +54,12 @@ export function png(file: string, w: number, h: number) {
     for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
     return c >>> 0;
   });
-  const crc = (buf: Buffer) => {
+  const crc = (/** @type {Buffer} */ buf) => {
     let c = 0xffffffff;
     for (const b of buf) c = crcTable[(c ^ b) & 0xff] ^ (c >>> 8);
     return (c ^ 0xffffffff) >>> 0;
   };
-  const chunk = (type: string, data: Buffer) => {
+  const chunk = (/** @type {string} */ type, /** @type {Buffer} */ data) => {
     const body = Buffer.concat([Buffer.from(type), data]);
     const out = Buffer.alloc(8 + data.length + 4);
     out.writeUInt32BE(data.length, 0);
@@ -73,15 +77,23 @@ export function png(file: string, w: number, h: number) {
   ]));
 }
 
-export let root: string;
-export let scratch: string;
-export let verdicts: string;
+/** @type {string} */
+export let root;
+/** @type {string} */
+export let scratch;
+/** @type {string} */
+export let verdicts;
 
-export function run(command: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string } = {}) {
+/**
+ * @param {string[]} command
+ * @param {{ cwd?: string; env?: NodeJS.ProcessEnv; input?: string }} [opts]
+ */
+export function run(command, opts = {}) {
   return spawnSync(command[0], command.slice(1), { cwd: opts.cwd, env: opts.env, input: opts.input ?? "", encoding: "utf8" });
 }
 
-export function git(...args: string[]) {
+/** @param {string[]} args */
+export function git(...args) {
   const proc = run(["git", ...args], { cwd: root });
   if (proc.status !== 0) throw new Error(`git ${args.join(" ")}: ${proc.stderr}`);
   return proc.stdout;
@@ -92,7 +104,8 @@ export function env(session = SESSION) {
   return { ...clean, CLAUDE_CODE_SESSION_ID: session, FAKE_VERDICTS: verdicts, HELIX_NO_OPEN: "1" };
 }
 
-export function helix(args: string[], expectCode = 0, session = SESSION): string {
+/** @param {string[]} args @returns {string} */
+export function helix(args, expectCode = 0, session = SESSION) {
   const proc = run(["node", HELIX, ...args], { cwd: root, env: env(session) });
   if (proc.status !== expectCode) {
     throw new Error(`helix ${args.join(" ")} exited ${proc.status}, expected ${expectCode}\n` +
@@ -101,27 +114,31 @@ export function helix(args: string[], expectCode = 0, session = SESSION): string
   return proc.stdout + proc.stderr;
 }
 
-export function hook(event: string, payload: unknown, cwd = root, input = JSON.stringify(payload)) {
+/** @param {string} event @param {unknown} payload */
+export function hook(event, payload, cwd = root, input = JSON.stringify(payload)) {
   const proc = run(["node", HELIX, "hook", event], { cwd, input, env: env() });
   expect(proc.status).toBe(0);
   return proc.stdout.trim() ? JSON.parse(proc.stdout) : null;
 }
 
-export const reply = (text: string, session = SESSION) => hook("prompt", { session_id: session, cwd: root, prompt: text });
+export const reply = (/** @type {string} */ text, session = SESSION) => hook("prompt", { session_id: session, cwd: root, prompt: text });
 export const stop = (session = SESSION) => hook("stop", { session_id: session, cwd: root, stop_hook_active: false });
 
-export function setVerdicts(update: { ui?: unknown; architecture?: unknown; correctness?: unknown }) {
+/** @param {{ ui?: unknown; architecture?: unknown; correctness?: unknown; matcher?: unknown }} update */
+export function setVerdicts(update) {
   const current = fs.existsSync(verdicts) ? JSON.parse(fs.readFileSync(verdicts, "utf8")) : { ui: null, code: {} };
   if (update.ui) current.ui = update.ui;
   if (update.architecture) current.code.architecture = update.architecture;
   if (update.correctness) current.code.correctness = update.correctness;
+  if (update.matcher) current.matcher = update.matcher;
   fs.writeFileSync(verdicts, JSON.stringify(current));
 }
 
 export const state = (run = "order") => JSON.parse(fs.readFileSync(path.join(root, ".git/helix/runs", run, "state.json"), "utf8"));
-export const write = (file: string, text: string) => fs.writeFileSync(path.join(root, file), text);
+export const write = (/** @type {string} */ file, /** @type {string} */ text) => fs.writeFileSync(path.join(root, file), text);
 
-export function input(name: string, data: unknown) {
+/** @param {string} name @param {unknown} data */
+export function input(name, data) {
   const file = path.join(scratch, name);
   fs.writeFileSync(file, JSON.stringify(data));
   return file;
@@ -138,14 +155,16 @@ export function plan({ ui = true, count = 2 } = {}) {
   helix(["tests", "order", "--file", input("tests.json", { checkpoints: tests })]);
 }
 
-export function approvedPlan(opts?: { ui?: boolean; count?: number }) {
+/** @param {{ ui?: boolean; count?: number }} [opts] */
+export function approvedPlan(opts) {
   plan(opts);
   helix(["submit-plan", "order", "--no-open"]);
   reply("looks good, approve");
   helix(["approve", "order"]);
 }
 
-export function screenshots(): [string, string] {
+/** @returns {[string, string]} */
+export function screenshots() {
   const ref = path.join(scratch, "ref.png");
   const impl = path.join(scratch, "impl.png");
   png(ref, 10, 20);
@@ -153,15 +172,19 @@ export function screenshots(): [string, string] {
   return [ref, impl];
 }
 
-/** The fixer's answers to one review attempt, written where its brief says. */
-export function answer(attempt: number, responses: { id: string; status: string; note?: string }[]) {
-  const file = path.join(root, `.git/helix/runs/order/work/fixes/cp-1-review-${String(attempt).padStart(3, "0")}.json`);
+/**
+ * The fixer's answers to one review attempt, written where its brief says.
+ * @param {number} attempt
+ * @param {{ id: string; status: string; note?: string }[]} responses
+ */
+export function answer(attempt, responses, cp = "cp-1") {
+  const file = path.join(root, `.git/helix/runs/order/work/fixes/${cp}-review-${String(attempt).padStart(3, "0")}.json`);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify({ responses }));
 }
 
 /** A reviewer verdict raising one finding; `repeats` names the earlier finding it raises again. */
-export const finding = (problem: string, repeats = "", line = 1) => ({
+export const finding = (/** @type {string} */ problem, repeats = "", line = 1) => ({
   verdict: "changes_requested", summary: "Not yet.", findings: [{
     severity: "major", file: "app.py", line, rule: "architecture.md#layers", problem, required_fix: "go through the service", repeats,
   }],
@@ -174,10 +197,20 @@ export function gatesBeforeReview() {
   helix(["gate", "ui", "order", "--pair", ref, impl, "loaded"]);
 }
 
-export const reviewerPrompt = (attempt: number, reviewer: number) => fs.readFileSync(path.join(root,
+export const reviewerPrompt = (/** @type {number} */ attempt, /** @type {number} */ reviewer) => fs.readFileSync(path.join(root,
   `.git/helix/runs/order/evidence/cp-1/review-${String(attempt).padStart(3, "0")}/reviewer-${reviewer}.prompt.md`), "utf8");
 
-export const fixerBrief = () => fs.readFileSync(helix(["brief", "order", "fixer"]).match(/Brief: (.+)/)![1], "utf8");
+/** The first group of `pattern` in `text`; fails the test when it does not match. */
+export function found(/** @type {string} */ text, /** @type {RegExp} */ pattern) {
+  const match = text.match(pattern);
+  if (!match) throw new Error(`${pattern} not found in:\n${text}`);
+  return match[1];
+}
+
+/** The brief file `helix brief` printed. */
+export const briefFile = (/** @type {string} */ output) => found(output, /Brief: (.+)/);
+
+export const fixerBrief = () => fs.readFileSync(briefFile(helix(["brief", "order", "fixer"])), "utf8");
 
 export function passAllGates() {
   write("app.py", "VALUE = 2\n");
@@ -208,7 +241,9 @@ export function useRepo() {
     const configFile = path.join(root, ".helix/config.json");
     const config = JSON.parse(fs.readFileSync(configFile, "utf8"));
     const fake = { backend: "exec", command: ["node", "fake_reviewer.mjs"] };
-    config.reviewers = { ui: fake, code: [{ ...fake, lens: "architecture" }, { ...fake, lens: "correctness" }], timeout_seconds: 60 };
+    config.reviewers = {
+      ui: fake, code: [{ ...fake, lens: "architecture" }, { ...fake, lens: "correctness" }], matcher: fake, timeout_seconds: 60,
+    };
     fs.writeFileSync(configFile, JSON.stringify(config));
     git("add", "-A");
     git("commit", "-q", "-m", "initial");
@@ -220,7 +255,10 @@ export function useRepo() {
   });
 }
 
-/** Points the helpers at another checkout, such as a teammate's clone. */
-export function useRoot(dir: string) {
+/**
+ * Points the helpers at another checkout, such as a teammate's clone.
+ * @param {string} dir
+ */
+export function useRoot(dir) {
   root = dir;
 }

@@ -4,7 +4,7 @@ import { expect } from "expect";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, test } from "node:test";
-import { answer, APPROVE, approvedPlan, finding, fixerBrief, gatesBeforeReview, helix, REJECT, reply, reviewerPrompt, root, screenshots, setVerdicts, state, useRepo, write } from "./helpers.ts";
+import { answer, APPROVE, approvedPlan, briefFile, finding, fixerBrief, gatesBeforeReview, helix, REJECT, reply, reviewerPrompt, root, screenshots, setVerdicts, state, useRepo, write } from "./helpers.mjs";
 
 useRepo();
 
@@ -147,6 +147,76 @@ describe("adversarial review", () => {
     answer(3, [{ id: "F1", status: "fixed", note: "retry banner" }]);
     setVerdicts({ architecture: APPROVE });
     helix(["gate", "review", "order"]);
+  });
+
+  test("the finding matcher links a finding the reviewer raised again without saying so", () => {
+    approvedPlan();
+    write("app.py", "VALUE = 2\n");
+    gatesBeforeReview();
+    setVerdicts({ architecture: finding("UI calls storage directly") });
+    helix(["gate", "review", "order"], 2);
+    write("app.py", "VALUE = 2  # tried\n");
+    gatesBeforeReview();
+    answer(1, [{ id: "F1", status: "fixed", note: "moved the call" }]);
+    setVerdicts({
+      architecture: finding("Storage is still read from the UI"),
+      matcher: { matches: [{ finding: "R1-1", repeats: "F1", recurs: "" }] },
+    });
+    expect(helix(["gate", "review", "order"], 2)).toContain("raised in review attempts 1, 2");
+    expect(state().checkpoints[0].findings).toHaveLength(1);
+    const matcherPrompt = fs.readFileSync(path.join(root, ".git/helix/runs/order/evidence/cp-1/review-002/matcher.prompt.md"), "utf8");
+    expect(matcherPrompt).toContain("- F1 (open) app.py:1");
+    expect(matcherPrompt).toContain("- R1-1 app.py:1 (architecture.md#layers): Storage is still read from the UI");
+  });
+
+  test("a matcher answer naming a finding it was not shown is a gate error, and findings stay as they were", () => {
+    approvedPlan();
+    write("app.py", "VALUE = 2\n");
+    gatesBeforeReview();
+    setVerdicts({ architecture: finding("UI calls storage directly") });
+    helix(["gate", "review", "order"], 2);
+    write("app.py", "VALUE = 2  # tried\n");
+    gatesBeforeReview();
+    answer(1, [{ id: "F1", status: "fixed" }]);
+    setVerdicts({ architecture: finding("Storage is still read from the UI"), matcher: { matches: [{ finding: "R1-1", repeats: "F7", recurs: "" }] } });
+    expect(helix(["gate", "review", "order"], 2)).toContain("'F7', which is not one of that reviewer's earlier findings");
+    expect(state().checkpoints[0].gates.review.status).toBe("error");
+    expect(state().checkpoints[0].findings).toMatchObject([{ id: "F1", raised: [1], status: "open" }]);
+  });
+
+  test("findings fixed in a checkpoint reach later briefs, and one that comes back is proposed as a learning", () => {
+    approvedPlan({ ui: false });
+    write("app.py", "VALUE = 2\n");
+    helix(["gate", "behavior", "order"]);
+    setVerdicts({ architecture: finding("UI calls storage directly") });
+    helix(["gate", "review", "order"], 2);
+    write("app.py", "VALUE = 2  # through the service\n");
+    helix(["gate", "behavior", "order"]);
+    answer(1, [{ id: "F1", status: "fixed" }]);
+    setVerdicts({ architecture: APPROVE });
+    helix(["gate", "review", "order"]);
+    helix(["request-approval", "order"]);
+    reply("approved");
+    helix(["approve", "order"]);
+    helix(["commit", "order"]);
+    for (const role of ["implementer", "test-writer"]) {
+      const brief = fs.readFileSync(briefFile(helix(["brief", "order", role])), "utf8");
+      expect(brief).toContain("## Review findings fixed in earlier checkpoints");
+      expect(brief).toContain("- cp-1 F1 app.py:1 (architecture.md#layers): UI calls storage directly Fix: go through the service");
+    }
+    write("app.py", "VALUE = 2  # step two\n");
+    helix(["gate", "behavior", "order"]);
+    setVerdicts({ architecture: finding("Storage read straight from the UI"), matcher: { matches: [{ finding: "R1-1", repeats: "", recurs: "cp-1 F1" }] } });
+    helix(["gate", "review", "order"], 2);
+    expect(state().checkpoints[1].findings[0].recurs).toBe("cp-1 F1");
+    write("app.py", "VALUE = 2  # step two, through the service\n");
+    helix(["gate", "behavior", "order"]);
+    answer(1, [{ id: "F1", status: "fixed" }], "cp-2");
+    setVerdicts({ architecture: APPROVE });
+    helix(["gate", "review", "order"]);
+    const out = helix(["request-approval", "order"]);
+    expect(out).toContain("- F1 (again cp-1 F1) app.py:1: Storage read straight from the UI");
+    expect(out).toContain("Save only the ones they agree to, with `helix learn '<rule>'`");
   });
 
   test("a reviewer that requests changes without findings is an error, not a finding", () => {

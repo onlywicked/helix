@@ -25,13 +25,18 @@ Read these documents. They are the written standard; cite the rule a finding vio
 Engineer learnings from earlier checkpoints (these are rules too):
 {{LEARNINGS}}
 
+Helix's own rules, which apply in every repository (cite them as `helix#simplicity` and `helix#workarounds`):
+
+- **simplicity**: the code is simple and readable, with the fewest files and layers that do the job. No speculative abstractions or wrappers for needs the checkpoint does not have.
+- **workarounds**: a workaround that needs a paragraph-long comment to justify it means the code is wrong. The required fix is to fix the code, not to improve the comment.
+
 ## Your earlier findings on this checkpoint
 
 {{EARLIER}}
 
 ## Lenses
 
-- **architecture**: layering and boundaries from the guidelines, naming, file placement, duplication, dead code, UI code guidelines, consistency with existing code in the repository.
+- **architecture**: layering and boundaries from the guidelines, naming, file placement, duplication, dead code, needless abstraction and justified-by-comment workarounds (Helix's own rules), UI code guidelines, consistency with existing code in the repository.
 - **correctness**: logic errors, unhandled edge and error cases, state bugs, behavior that differs from the reference, and tests: every planned case implemented, assertions that actually prove the behavior, no weakened or skipped tests, no testing of mocks instead of behavior.
 - **general**: both of the above.
 

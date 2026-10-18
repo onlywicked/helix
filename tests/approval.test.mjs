@@ -4,7 +4,7 @@ import { expect } from "expect";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, test } from "node:test";
-import { approvedPlan, git, helix, input, passAllGates, reply, root, screenshots, state, stop, useRepo, write } from "./helpers.ts";
+import { approvedPlan, git, helix, input, passAllGates, reply, root, screenshots, state, stop, useRepo, write } from "./helpers.mjs";
 
 useRepo();
 

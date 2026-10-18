@@ -1,15 +1,6 @@
 ---
 name: helix
 description: Use when building, migrating, porting or refactoring a feature, screen or app with agents where quality must hold across many steps - e.g. rewriting React Native screens in Swift/Kotlin, rebuilding a screen from a reference app, prototype or designs, or any large change that one-shot generation would get wrong. Also use when the engineer mentions Helix, checkpoints, gates, or resuming a Helix run.
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: "node \"${CLAUDE_PLUGIN_ROOT}/scripts/helix.mjs\" hook stop || true"
-  UserPromptSubmit:
-    - hooks:
-        - type: command
-          command: "node \"${CLAUDE_PLUGIN_ROOT}/scripts/helix.mjs\" hook prompt || true"
 ---
 
 # Helix
@@ -73,7 +64,7 @@ Helix uses two hooks:
 
 | Agent | Setup |
 |---|---|
-| Claude Code | Armed from this file when the skill is invoked. Invoke the skill again after resuming a session. |
+| Claude Code | Installed as a plugin: nothing to do, the plugin brings both hooks. Installed as a plain skill: `helix hooks claude` once. |
 | Codex | `helix hooks codex` once, then trust the hooks when Codex asks (`/hooks`). |
 | Gemini CLI | `helix hooks gemini` once. |
 | Cursor | `helix hooks cursor` once. |
@@ -154,6 +145,7 @@ The config and learnings live in `.helix/` and are committed with the code; a le
 5. **Engineer gate** (stop). `helix request-approval <run>`.
    - In autonomous mode the CLI approves the checkpoint and you continue to commit.
    - Otherwise, tell the engineer in a few lines what the checkpoint does, how to see it running, and the evidence (attempt counts, UI review, reviewer verdicts). Then **stop**.
+   - If it lists **recurring problems** (fixed in an earlier checkpoint, then made again), propose a one-line learning for each. Save only those the engineer agrees to, with `helix learn '<rule>'`.
 
    When they reply (without a prompt hook, relay it first with `helix reply`):
    - Approval: `helix approve <run>`.
@@ -203,7 +195,7 @@ One reply can carry several instructions, such as "approved, and do the next two
 
 If the session was resumed or restarted:
 
-1. Make sure the hooks are active. In Claude Code, invoke this skill again.
+1. Make sure the hooks are active (see Hooks).
 2. Run `helix claim <run>`. In Claude Code and Codex, or with `HELIX_SESSION_ID` exported, it gives the run to your session. Otherwise it releases the run, and the next message the engineer sends through a prompt hook gives it to this session.
 3. Run `helix status` and continue from the printed next action.
 

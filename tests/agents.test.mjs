@@ -4,7 +4,7 @@ import { expect } from "expect";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, test } from "node:test";
-import { APPROVE, approvedPlan, env, git, HELIX, helix, hook, plan, reply, root, run, scratch, screenshots, SESSION, state, stop, UI_PASS, useRepo, write } from "./helpers.ts";
+import { APPROVE, approvedPlan, env, git, HELIX, helix, hook, plan, reply, root, run, scratch, screenshots, SESSION, state, stop, UI_PASS, useRepo, write } from "./helpers.mjs";
 
 useRepo();
 
@@ -28,7 +28,7 @@ describe("other agents", () => {
       expect(proc.status).toBe(0);
     }
     const config = JSON.parse(fs.readFileSync(path.join(codexHome, "hooks.json"), "utf8"));
-    const commands = (event: string) => config.hooks[event].flatMap((g: any) => g.hooks.map((h: any) => h.command));
+    const commands = (/** @type {string} */ event) => config.hooks[event].flatMap((/** @type {any} */ g) => g.hooks.map((/** @type {any} */ h) => h.command));
     expect(commands("Stop")).toEqual(["node other-hook.mjs", expect.stringContaining("hook stop")]);
     expect(commands("UserPromptSubmit")).toEqual([expect.stringContaining("hook prompt")]);
     // The installed command is a working Helix hook: it blocks a stop mid-run.
@@ -48,7 +48,7 @@ describe("other agents", () => {
       const proc = run(["node", HELIX, "hooks", agent], { cwd: root, env: { ...env(), HOME: home } });
       expect(proc.status).toBe(0);
     }
-    const read = (file: string) => JSON.parse(fs.readFileSync(path.join(home, file), "utf8"));
+    const read = (/** @type {string} */ file) => JSON.parse(fs.readFileSync(path.join(home, file), "utf8"));
     const gemini = read(".gemini/settings.json");
     expect(gemini.theme).toBe("dark");
     expect(gemini.hooks.AfterAgent).toHaveLength(1);
@@ -67,7 +67,7 @@ describe("other agents", () => {
 
   test("Cursor hooks use conversation ids, workspace roots and follow-up messages", () => {
     approvedPlan();
-    const cursor = (event: string, payload: object) => {
+    const cursor = (/** @type {string} */ event, /** @type {object} */ payload) => {
       const proc = run(["node", HELIX, "hook", event, "cursor"], {
         cwd: scratch, input: JSON.stringify(payload), env: env(),
       });
@@ -108,7 +108,7 @@ fs.writeFileSync(out, JSON.stringify(ui ? ${JSON.stringify(UI_PASS)} : ${JSON.st
     });
     expect(proc.status).toBe(0);
     const call = JSON.parse(fs.readFileSync(calls, "utf8").trim());
-    expect(call.args.filter((a: string) => a === "-i")).toHaveLength(2);
+    expect(call.args.filter((/** @type {string} */ a) => a === "-i")).toHaveLength(2);
     expect(call.args.at(-1)).toMatch(/pair-1-implementation\.png$/); // no prompt after the images
     expect(call.stdin).toContain("perfectionist design reviewer");
   });
@@ -125,7 +125,7 @@ fs.writeFileSync(out, JSON.stringify(ui ? ${JSON.stringify(UI_PASS)} : ${JSON.st
     expect(proc.status).toBe(0);
     const config = JSON.parse(fs.readFileSync(path.join(root, ".helix/config.json"), "utf8"));
     expect(config.reviewers.ui.backend).toBe("codex");
-    expect(config.reviewers.code.map((r: any) => r.backend)).toEqual(["codex", "codex"]);
+    expect(config.reviewers.code.map((/** @type {any} */ r) => r.backend)).toEqual(["codex", "codex"]);
   });
 });
 
