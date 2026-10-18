@@ -8,7 +8,7 @@ import { appendLearning, appendLearningLines, learningLines, learningsPath, read
 import { nextAction } from "../lib/next-action.mjs";
 import { fingerprint, legacyPath, localConfigPath, repoRoot, runDir, TEAM_DIR, teamConfigPath, workDir } from "../lib/repo.mjs";
 import { gateState, requiredGates } from "../lib/state.mjs";
-import { allRunIds, loadRun } from "../lib/store.mjs";
+import { allRunIds, loadRun, runsToPickUp } from "../lib/store.mjs";
 import { renderViewer } from "../lib/viewer.mjs";
 
 /** @import { Args, Config } from "../lib/types.js" */
@@ -97,8 +97,12 @@ export function cmdStatus(args) {
   const local = localConfigPath(root);
   console.log(`Config: ${teamConfigPath(root)}${fs.existsSync(local) ? `, with your overrides in ${local}` : ""}\n` +
     `Learnings: ${learningsPath(root)}\n`);
+  for (const rid of runsToPickUp(root)) {
+    console.log(`Run ${rid} on this branch is further along than this clone's copy, or new to it: pick it up with ` +
+      `\`helix claim ${rid}\`.\n`);
+  }
   if (!ids.length) {
-    console.log("No Helix runs. Start one with `helix new`.");
+    console.log("No Helix runs in this clone. Start one with `helix new`.");
     return;
   }
   const fp = fingerprint(root);

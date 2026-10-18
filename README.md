@@ -136,6 +136,19 @@ Tell the agent in your own words; it runs the matching command.
 
 Plan approval always needs you. To work on several screens at once, start one run per screen, each in its own git worktree.
 
+## Handing a run to a teammate
+
+Every checkpoint commit carries the run in `.helix/runs/<run>.json`: the goal and reference, the plan, test cases, the engineer's decisions and approvals, and the review findings. To continue someone else's run, check out their branch and run:
+
+```
+helix status          # lists the runs on this branch you can pick up
+helix claim <run>     # takes one over from its last checkpoint commit
+```
+
+The run continues with the next checkpoint, in your session. Briefs are rebuilt on your machine from the run, so they carry your paths and the latest learnings. Evidence (test logs, screenshots, reviewer output) stays on the machine that produced it; the commit messages record what each gate proved. Handing back works the same way: once you have committed more checkpoints, the original engineer pulls and claims the run again.
+
+A run has one owner at a time; two people building the same run in parallel would mean two branches, and so two runs. When the engineer accepts the finished feature, Helix removes the run file in a commit of its own (`helix(<run>): close the run`), so it never reaches `main`. History keeps it.
+
 ## Requirements
 
 | | Why | Notes |
@@ -159,6 +172,7 @@ Plan approval always needs you. To work on several screens at once, start one ru
 The team files are committed with the code, so every engineer's agents apply the same config and learnings:
 
 - `.helix/config.json`: the team config (see Configuration).
+- `.helix/runs/<run>.json`: an unfinished run's plan and progress, committed with each of its checkpoints so a teammate can pick it up (see Handing a run to a teammate). Accepting the feature removes it.
 - `.helix/learnings.md`: the engineers' lasting feedback, one rule per line. A learning recorded during a run is committed with its checkpoint, so it reaches the team when that branch merges, and a teammate can push back on it in review like any guideline change. Learnings recorded in your other worktrees apply right away, before they are merged.
 
 Gates ignore `.helix/`: editing a team file never invalidates a gate, and reviewers never see it in the diff.

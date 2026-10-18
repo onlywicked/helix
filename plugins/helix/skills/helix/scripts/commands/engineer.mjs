@@ -9,8 +9,8 @@ import { appendLearning, LEARNING_SAVED } from "../lib/learnings.mjs";
 import { NO_HOOK_HINT, nextAction, relayHint } from "../lib/next-action.mjs";
 import { dirtyFiles, fingerprint, head, repoRoot, runDir, sessionId } from "../lib/repo.mjs";
 import { advance, cpById, lastReply, logAttempt, recordReply, requiredGates } from "../lib/state.mjs";
-import { loadRun, requireCurrent, transaction } from "../lib/store.mjs";
-import { gateLine } from "./commit.mjs";
+import { allRunIds, committedCount, loadRun, pickUpRun, requireCurrent, runsToPickUp, transaction } from "../lib/store.mjs";
+import { closeSharedRun, gateLine } from "./commit.mjs";
 import { ensurePriorGates } from "./gates.mjs";
 
 /** @import { Args, Awaiting, Checkpoint, Feedback, GateRecord, Ruling, Run } from "../lib/types.js" */
@@ -39,6 +39,8 @@ export function cmdApprove(args) {
       run.awaiting = null;
       run.accepted_at = now();
       run.history.push({ at: now(), event: "the engineer accepted the feature", reply });
+      const closed = closeSharedRun(root, run.id);
+      if (closed) run.history.push({ at: now(), event: `run file removed from the branch in ${closed.slice(0, 10)}` });
     } else if (awaiting.kind === "plan") {
       const dirty = dirtyFiles(root);
       if (dirty.length) {
@@ -301,6 +303,14 @@ export function cmdReply(args) {
  */
 export function cmdClaim(args) {
   const root = repoRoot();
+  if (runsToPickUp(root).includes(args._[0])) {
+    const older = allRunIds(root).includes(args._[0]);
+    const run = pickUpRun(root, args._[0]);
+    console.log(`Picked up run '${run.id}' from the branch: ${committedCount(run)} of ${run.checkpoints.length} ` +
+      `checkpoints committed.${older ? " It replaces this clone's older copy." : ""}`);
+    console.log("Next:", nextAction(run, root));
+    return;
+  }
   const { run } = transaction(root, args._[0], (run) => {
     run.owner_session = sessionId();
     run.history.push({ at: now(), event: run.owner_session ? "claimed by a new session" : "released for the next session" });

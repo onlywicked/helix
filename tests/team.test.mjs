@@ -4,7 +4,10 @@ import { expect } from "expect";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, test } from "node:test";
-import { approvedPlan, briefFile, env, git, HELIX, helix, reply, reviewerPrompt, root, run, scratch, useRepo, useRoot, write } from "./helpers.mjs";
+import {
+  approvedPlan, briefFile, env, git, HELIX, helix, reply, reviewerPrompt, root, run, scratch, screenshots, SESSION, state, stop, useRepo,
+  useRoot, write,
+} from "./helpers.mjs";
 
 useRepo();
 
@@ -104,5 +107,70 @@ describe("team files", () => {
     expect(fs.existsSync(path.join(root, ".git/helix/learnings.md"))).toBe(false);
     expect(fs.readFileSync(path.join(root, ".helix/config.json"), "utf8")).toContain("fake_reviewer.mjs");
     expect(fs.readFileSync(path.join(root, ".helix/learnings.md"), "utf8")).toContain("- Titles are semibold.");
+  });
+});
+
+describe("handing a run over", () => {
+  /**
+   * Builds the current checkpoint as `code`, takes it through every gate and commits it, all as `session`.
+   * @param {string} code
+   */
+  function commitCheckpoint(code, session = SESSION) {
+    write("app.py", code);
+    helix(["gate", "behavior", "order"], 0, session);
+    if (state().current === "cp-1") {
+      const [ref, impl] = screenshots();
+      helix(["gate", "ui", "order", "--pair", ref, impl, "loaded order"], 0, session);
+    }
+    helix(["gate", "review", "order"], 0, session);
+    helix(["request-approval", "order"], 0, session);
+    reply("ship it", session);
+    helix(["approve", "order"], 0, session);
+    helix(["commit", "order"], 0, session);
+  }
+
+  test("a teammate picks a run up from the branch, and it comes back once they committed more", () => {
+    approvedPlan();
+    commitCheckpoint("VALUE = 2\n");
+    const shared = JSON.parse(git("show", "HEAD:.helix/runs/order.json"));
+    expect(shared.checkpoints.map((/** @type {any} */ cp) => cp.status)).toEqual(["committed", "in_progress"]);
+    expect(shared.owner_session).toBeUndefined(); // sessions belong to one machine
+    expect(shared.last_prompt).toBeUndefined();
+    const original = root;
+    const teammate = path.join(scratch, "teammate");
+    git("clone", "-q", root, teammate);
+    useRoot(teammate);
+    try {
+      const mate = "teammate-session";
+      expect(helix(["status"], 0, mate)).toContain("pick it up with `helix claim order`");
+      expect(helix(["new", "other", "--goal", "g", "--reference", "r"], 1, mate)).toContain("Run 'order' on this branch is unfinished");
+      expect(helix(["claim", "order"], 0, mate)).toContain("Picked up run 'order' from the branch: 1 of 2 checkpoints committed.");
+      const head = git("rev-parse", "HEAD").trim();
+      expect(state()).toMatchObject({ owner_session: mate, goal: "Order screen", current: "cp-2" });
+      expect(state().checkpoints[0].commit).toBe(head);
+      expect(state().checkpoints[1].base).toBe(head);
+      expect(fs.readFileSync(briefFile(helix(["brief", "order", "implementer"], 0, mate)), "utf8")).toContain("### cp-2: Step 2");
+      expect(stop(mate).decision).toBe("block"); // the hooks guard the teammate's session now
+      commitCheckpoint("VALUE = 2  # step two\n", mate);
+    } finally {
+      useRoot(original);
+    }
+    git("pull", "-q", teammate, "HEAD");
+    expect(helix(["status"])).toContain("pick it up with `helix claim order`");
+    expect(helix(["claim", "order"])).toContain("2 of 2 checkpoints committed. It replaces this clone's older copy.");
+    expect(state()).toMatchObject({ status: "done", awaiting: { kind: "final" } });
+  });
+
+  test("accepting the feature removes the run file in a commit of its own", () => {
+    approvedPlan({ count: 1 });
+    commitCheckpoint("VALUE = 2\n");
+    write("notes.txt", "unrelated\n");
+    git("add", "notes.txt");
+    reply("accepted, thanks");
+    expect(helix(["approve", "order"])).toContain("The feature is accepted.");
+    expect(git("log", "-1", "--format=%s")).toBe("helix(order): close the run\n");
+    expect(git("show", "--name-only", "--format=", "HEAD").trim()).toBe(".helix/runs/order.json");
+    expect(fs.existsSync(path.join(root, ".helix/runs/order.json"))).toBe(false);
+    expect(git("status", "--porcelain")).toBe("A  notes.txt\n"); // the engineer's staged work is left alone
   });
 });

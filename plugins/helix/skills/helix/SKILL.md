@@ -201,6 +201,8 @@ If the session was resumed or restarted:
 
 If a run is `stalled`, tell the engineer what blocked you, and run `helix resume <run>` when they reply.
 
+To continue a teammate's run, work on their branch. `helix status` lists the runs on it that this clone can pick up, and `helix claim <run>` takes one over from its last checkpoint commit: the plan, test cases, approvals and review findings travel with every checkpoint commit. Work the teammate had not committed yet is not on the branch, so the run continues with the next checkpoint.
+
 ## Red flags: stop and correct course
 
 | Thought | Reality |

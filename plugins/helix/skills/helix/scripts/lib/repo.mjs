@@ -60,6 +60,13 @@ export const localConfigPath = (root) => path.join(sharedDir(root), "config.loca
  * @param {"config.json" | "learnings.md"} name
  */
 export const legacyPath = (root, name) => path.join(sharedDir(root), name);
+/**
+ * A run's plan and progress, committed with each of its checkpoints so a
+ * teammate who checks out the branch can pick the run up.
+ * @param {string} root
+ * @param {string} runId
+ */
+export const sharedRunPath = (root, runId) => path.join(root, TEAM_DIR, "runs", `${runId}.json`);
 /** Pathspec for the code under review: everything but the team files. */
 export const CODE = ["--", ".", `:(exclude)${TEAM_DIR}`];
 

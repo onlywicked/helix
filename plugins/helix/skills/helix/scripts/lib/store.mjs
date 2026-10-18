@@ -3,9 +3,9 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { HelixError, now, readJson, readJsonInput, sleepSync, writeJson } from "./core.mjs";
+import { clone, git, HelixError, now, readJson, readJsonInput, sleepSync, writeJson } from "./core.mjs";
 import { nextAction } from "./next-action.mjs";
-import { runDir, runsDir, sessionId, workDir } from "./repo.mjs";
+import { runDir, runsDir, sessionId, sharedRunPath, TEAM_DIR, workDir } from "./repo.mjs";
 import { currentCp } from "./state.mjs";
 import { renderViewer } from "./viewer.mjs";
 
@@ -54,9 +54,75 @@ export function withLock(root, runId, fn) {
 export function loadRun(root, runId) {
   const file = path.join(runDir(root, runId), "state.json");
   if (!fs.existsSync(file)) {
-    throw new HelixError(`No Helix run named '${runId}'. Known runs: ${allRunIds(root).join(", ") || "none"}.`);
+    const pickUp = readSharedRun(root, runId) ? ` Run '${runId}' is on this branch: pick it up with \`helix claim ${runId}\`.` : "";
+    throw new HelixError(`No Helix run named '${runId}' in this clone.${pickUp} Known runs: ${allRunIds(root).join(", ") || "none"}.`);
   }
   return readJson(file);
+}
+
+/** Run fields that belong to one machine's agent sessions, never to the branch. */
+const SESSION_FIELDS = /** @type {const} */ (["owner_session", "hook_session", "stop_guard", "last_prompt", "hooked"]);
+
+/** @param {Run} run */
+export const committedCount = (run) => run.checkpoints.filter((cp) => cp.status === "committed").length;
+
+/** @param {string} root @returns {string[]} */
+export function sharedRunIds(root) {
+  const dir = path.dirname(sharedRunPath(root, "-"));
+  return fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5)).sort() : [];
+}
+
+/** @param {string} root @param {string} runId @returns {Run | null} */
+export function readSharedRun(root, runId) {
+  const file = sharedRunPath(root, runId);
+  return fs.existsSync(file) ? readJsonInput(file) : null;
+}
+
+/**
+ * Runs on this branch that are further along than this clone's copy, or that
+ * this clone has no copy of: a teammate's work to pick up.
+ * @param {string} root
+ */
+export function runsToPickUp(root) {
+  const local = new Set(allRunIds(root));
+  return sharedRunIds(root).filter((rid) => !local.has(rid) ||
+    committedCount(/** @type {Run} */ (readSharedRun(root, rid))) > committedCount(loadRun(root, rid)));
+}
+
+/**
+ * Writes the run, as it stands once this checkpoint commit is made, into the
+ * working tree for the commit to carry. The commit's own hash is not known
+ * yet; pickUpRun fills it in from git.
+ * @param {string} root
+ * @param {Run} run
+ */
+export function writeSharedRun(root, run) {
+  const shared = clone(run);
+  for (const field of SESSION_FIELDS) delete shared[field];
+  writeJson(sharedRunPath(root, run.id), shared);
+}
+
+/**
+ * Takes over a run from the branch: the plan and progress as of its last
+ * checkpoint commit, for this clone and session. The next checkpoint starts
+ * from that commit.
+ * @param {string} root
+ * @param {string} runId
+ */
+export function pickUpRun(root, runId) {
+  const shared = readSharedRun(root, runId);
+  if (!shared) throw new HelixError(`Run '${runId}' is not on this branch (no ${TEAM_DIR}/runs/${runId}.json).`);
+  const commit = git(root, ["log", "-1", "--format=%H", "--", path.relative(root, sharedRunPath(root, runId))]);
+  for (const cp of shared.checkpoints) {
+    if (cp.status === "committed") cp.commit ??= commit;
+    if (cp.status === "in_progress") cp.base = commit;
+  }
+  /** @type {Run} */
+  const run = { ...shared, owner_session: sessionId(), hook_session: null, stop_guard: null, last_prompt: null, hooked: false };
+  run.history.push({ at: now(), event: `picked up from the branch at ${commit.slice(0, 10)}` });
+  withLock(root, runId, () => saveRun(root, run));
+  fs.mkdirSync(workDir(root, runId), { recursive: true });
+  return run;
 }
 
 /** @param {string} root @param {Run} run */

@@ -2,12 +2,12 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { bullet, git, HelixError, now, oneLine, plural, writeJson } from "../lib/core.mjs";
+import { bullet, clone, git, HelixError, now, oneLine, plural, sh, writeJson } from "../lib/core.mjs";
 import { loadConfig } from "../lib/config.mjs";
 import { nextAction } from "../lib/next-action.mjs";
-import { codeTree, fingerprint, head, repoRoot, sharedDir, treeMayHaveChanged } from "../lib/repo.mjs";
+import { codeTree, fingerprint, head, repoRoot, sharedDir, sharedRunPath, treeMayHaveChanged } from "../lib/repo.mjs";
 import { advance, gateState, requiredGates } from "../lib/state.mjs";
-import { evidenceDir, requireCurrent, transaction } from "../lib/store.mjs";
+import { evidenceDir, requireCurrent, transaction, writeSharedRun } from "../lib/store.mjs";
 
 /** @import { Args, Checkpoint, Gate, GateRecord } from "../lib/types.js" */
 
@@ -47,13 +47,18 @@ export function cmdCommit(args) {
         `${f.id} ${ruling.decision === "fix" ? "must be fixed" : "dropped"} ("${oneLine(f.problem)}"): "${oneLine(ruling.text)}"`))}`);
     }
     const message = `${sections.join("\n\n")}\n`;
-    const parent = head(root);
+    const parent = /** @type {string} */ (head(root));
+    // The commit carries the run as it stands once committed, so a teammate can pick it up from the branch.
+    const after = clone(run);
+    advance(root, after);
+    writeSharedRun(root, after);
     git(root, ["add", "-A"]);
     const trailers = (/** @type {string[] | undefined} */ (args.trailer) ?? []).flatMap((t) => ["--trailer", t]);
     git(root, ["commit", "-q", "-m", message, ...trailers]);
     treeMayHaveChanged();
     if (codeTree(root, (env) => git(root, ["read-tree", "HEAD"], env)) !== fp) {
-      git(root, ["reset", "-q", "--soft", /** @type {string} */ (parent)]);
+      git(root, ["reset", "-q", "--soft", parent]);
+      restoreSharedRun(root, run.id, parent);
       throw new HelixError("A git commit hook changed the files being committed, so the commit no longer matches " +
         "the tree the gates passed. The commit was undone and the hook's changes are kept in the working tree: " +
         "run the gates again on them, then commit.");
@@ -67,6 +72,43 @@ export function cmdCommit(args) {
   });
   console.log(`Committed ${commit.id} as ${commit.commit.slice(0, 10)}.`);
   console.log("Next:", nextAction(run, root, config));
+}
+
+/**
+ * Once the engineer accepts the feature, removes the run's file from the
+ * branch in a commit of its own: the run is over, and history keeps the file.
+ * Returns that commit, or null when the run file was never committed.
+ * @param {string} root
+ * @param {string} runId
+ */
+export function closeSharedRun(root, runId) {
+  const file = path.relative(root, sharedRunPath(root, runId));
+  if (sh(["git", "ls-files", "--error-unmatch", "--", file], root, { check: false }).status !== 0) return null;
+  git(root, ["rm", "-q", "--", file]);
+  try {
+    git(root, ["commit", "-q", "-m", `helix(${runId}): close the run\n\nThe engineer accepted the feature.\n`, "--", file]);
+  } catch (error) {
+    git(root, ["reset", "-q", "--", file]);
+    git(root, ["checkout", "-q", "--", file]);
+    throw error;
+  }
+  treeMayHaveChanged();
+  return head(root);
+}
+
+/**
+ * Puts the run file back as it was in `commit`, after a checkpoint commit was undone.
+ * @param {string} root
+ * @param {string} runId
+ * @param {string} commit
+ */
+function restoreSharedRun(root, runId, commit) {
+  const file = path.relative(root, sharedRunPath(root, runId));
+  if (sh(["git", "cat-file", "-e", `${commit}:${file}`], root, { check: false }).status === 0) {
+    git(root, ["checkout", "-q", commit, "--", file]);
+  } else {
+    git(root, ["rm", "-q", "-f", "--", file]);
+  }
 }
 
 /**

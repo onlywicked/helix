@@ -9,7 +9,7 @@ import { nextAction, relayHint } from "../lib/next-action.mjs";
 import { newCheckpoint, validateCheckpoints, validateDecisions } from "../lib/plan.mjs";
 import { repoRoot, runDir, sessionId, workDir } from "../lib/repo.mjs";
 import { advance, cpById } from "../lib/state.mjs";
-import { allRunIds, loadRun, readRunInput, saveRun, transaction, withLock } from "../lib/store.mjs";
+import { allRunIds, loadRun, readRunInput, runsToPickUp, saveRun, transaction, withLock } from "../lib/store.mjs";
 
 /** @import { Args, Run, TestCase } from "../lib/types.js" */
 
@@ -20,6 +20,11 @@ export function cmdNew(args) {
   const runId = slugify(args._[0]);
   if (fs.existsSync(path.join(runDir(root, runId), "state.json"))) {
     throw new HelixError(`Run '${runId}' already exists. Use \`helix status ${runId}\`.`);
+  }
+  const waiting = runsToPickUp(root)[0];
+  if (waiting) {
+    throw new HelixError(`Run '${waiting}' on this branch is unfinished. Pick it up with \`helix claim ${waiting}\`, or ` +
+      "start the new run in its own worktree (`git worktree add`).");
   }
   const busy = allRunIds(root).find((rid) => loadRun(root, rid).status !== "done");
   if (busy) {

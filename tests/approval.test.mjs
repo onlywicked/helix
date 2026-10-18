@@ -30,7 +30,8 @@ describe("approval and commit", () => {
     expect(message).toContain("- behavior: passed (1 run, never sent back): 1 planned case via `sh test.sh`");
     expect(message).toContain("- ui: passed (1 run, never sent back): 1 screen matches the reference");
     expect(message).toContain("- review: passed (1 run, never sent back): every reviewer approved");
-    expect(git("show", "--name-only", "--format=", "HEAD").trim()).toBe("app.py"); // only the product change
+    // The product change, and the run for a teammate to pick up.
+    expect(git("show", "--name-only", "--format=", "HEAD").trim().split("\n").sort()).toEqual([".helix/runs/order.json", "app.py"]);
     expect(git("status", "--porcelain")).toBe(""); // Helix's own writes never dirty the tree
     expect(fs.existsSync(path.join(root, ".git/helix/runs/order/evidence/cp-1/summary.json"))).toBe(true);
     // The evidence outlives the worktree: it is archived by commit in the shared git dir.
