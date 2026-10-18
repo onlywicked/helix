@@ -48,7 +48,7 @@ The roles are `planner`, `test-planner`, `test-writer`, `implementer` and `fixer
 
 You do not have to argue about these; the CLI refuses to break them.
 
-- **The CLI produces every gate verdict.** It runs the test command itself and launches the UI and code reviewers as isolated processes. Never write or edit a verdict, and never edit Helix's state files.
+- **The CLI produces every gate verdict.** It runs the test command itself and launches the UI and code reviewers as isolated processes. Never write or edit a verdict, and never edit Helix's state files, including the run files in `.helix/runs/`.
 - **Every verdict is bound to a fingerprint of the working tree.** Any change to any file in the tree (code, tests, a stray screenshot) makes earlier gates `stale`, and they must run again. `helix commit` refuses unless every gate passed on the exact tree being committed.
 - **Gates run in order:** behavior, then UI (UI checkpoints only), then adversarial review, then the engineer.
 - **Engineer decisions need the engineer's message.** `approve`, `autonomy`, `waive` and `rule` work only after the engineer actually said something. Their messages reach Helix through a prompt hook, or through `helix reply` (see below).
@@ -98,7 +98,7 @@ If `helix approve` says no engineer reply was recorded, the prompt hook did not 
 3. If init warns that a reviewer CLI is missing, tell the engineer. Reviewers run on `claude` or `codex` by default. Another model can plug in through the `exec` backend; the README covers it.
 4. Tell the engineer to commit `.helix/`, so everyone's agents share the config and the learnings.
 
-The config and learnings live in `.helix/` and are committed with the code; a learning recorded during a run is committed with its checkpoint. Gates ignore `.helix/`, so recording a learning never invalidates a gate. Run state and evidence stay inside the git directory. `helix status` prints where everything lives.
+The config and learnings live in `.helix/` and are committed with the code; a learning recorded during a run is committed with its checkpoint. Each checkpoint commit also carries the run's plan and progress in `.helix/runs/<run>.json`, so a teammate can pick the run up. Gates ignore `.helix/`, so none of this ever invalidates a gate. Evidence and briefs stay inside the git directory. `helix status` prints where everything lives.
 
 ## The loop
 
@@ -153,7 +153,7 @@ The config and learnings live in `.helix/` and are committed with the code; a le
      - `--text` is their words, verbatim. `--learning` is your one-line generalization of them, written so it applies to future checkpoints and not just this one.
      - If the feedback changes what the checkpoint should do, re-plan its test cases first: `helix brief <run> test-planner --checkpoint <id>`, then `helix tests`.
      - If the feedback also applies to code from earlier checkpoints, the fix goes into the current checkpoint. Its reviewers see it in the diff.
-6. `helix commit <run>` commits the checkpoint with its evidence and starts the next one.
+6. `helix commit <run>` commits the checkpoint, together with the run's progress, archives its evidence, and starts the next one.
    - If your harness or the engineer requires commit trailers, add `--trailer 'Key: value'` (repeatable).
    - If a git commit hook rewrites files, Helix undoes the commit. Rerun the gates on the hook's changes and commit again.
 
@@ -168,7 +168,7 @@ When the last checkpoint is committed, the run is `done`. Ask the engineer to te
 
 Then **stop**. When they reply (without a prompt hook, relay it first with `helix reply`):
 
-- If they accept it: `helix approve <run>`. The run is finished.
+- If they accept it: `helix approve <run>`. The run is finished, and Helix removes its run file from the branch in a commit of its own.
 - Otherwise:
   1. `helix feedback <run> --text '<their words>'`.
   2. Dispatch the `planner`; its brief now asks for new checkpoints.

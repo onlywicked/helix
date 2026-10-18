@@ -99,7 +99,7 @@ const COMMANDS = {
     positionals: 3, flags: { text: "string", learning: "string" }, required: ["text"], run: cmdRule,
   },
   claim: {
-    help: "take over a run after resuming in a new session", usage: `claim ${RUN}`, positionals: 1, run: cmdClaim,
+    help: "take over a run: after resuming in a new session, or a teammate's run from the branch", usage: `claim ${RUN}`, positionals: 1, run: cmdClaim,
   },
   pause: { help: "pause the run (engineer's request)", usage: `pause ${RUN}`, positionals: 1, run: cmdPause },
   resume: { help: "resume a paused or stalled run", usage: `resume ${RUN}`, positionals: 1, run: cmdResume },

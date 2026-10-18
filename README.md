@@ -133,6 +133,7 @@ Tell the agent in your own words; it runs the matching command.
 | "stop / pause" | `helix pause <run>`; later `helix resume <run>` |
 | a lasting preference ("we never use X") | `helix learn '<rule>'` |
 | "skip the visual check for this one" | `helix waive <run> ui --reason '<your words>'` (only the UI gate can be waived) |
+| "continue my teammate's run" (on their branch) | `helix claim <run>` (see Handing a run to a teammate) |
 
 Plan approval always needs you. To work on several screens at once, start one run per screen, each in its own git worktree.
 
@@ -225,6 +226,7 @@ Environment:
 
 ```
 .claude-plugin/marketplace.json   Claude Code marketplace listing this repository's plugin
+.github/workflows/ci.yml          type-check and tests on Node 18, 20, 22 and 24
 plugins/helix/
 ├── .claude-plugin/plugin.json    the plugin
 ├── hooks/hooks.json              the plugin's Stop and prompt hooks
@@ -243,7 +245,7 @@ tests/                            end-to-end CLI tests (real git repos, fake rev
                                   one file per area, sharing tests/helpers.mjs
 ```
 
-Development: run `npm install` (type definitions, TypeScript and the tests' `expect`), then `npm run check`: a strict type-check of the JavaScript through its JSDoc types, then the tests, one process per test file. The dev tooling stays at the repository root, outside the plugin, so installs never download it.
+Development: run `npm install` (type definitions, TypeScript and the tests' `expect`), then `npm run check`: a strict type-check of the JavaScript through its JSDoc types, then the tests, one process per test file. CI runs the same check on Node 18, 20, 22 and 24. The dev tooling stays at the repository root, outside the plugin, so installs never download it.
 
 ## The one rule that matters most
 
@@ -254,6 +256,7 @@ An attempt may be wrong; it may not move on until it is right. Every gate verdic
 - **Reviews cost model calls.** Every review attempt runs two code reviewers, and the finding matcher when a reviewer's findings may repeat earlier ones; every UI attempt runs one reviewer per screenshot pair.
 - **You capture the screenshots.** The UI gate compares what the agent captures, following your capture notes. It cannot drive a simulator or browser by itself.
 - **One unfinished run per worktree.** Gates fingerprint the whole tree, so parallel runs need their own worktrees (`git worktree add`).
+- **Evidence stays on one machine.** A run handed to a teammate carries its plan, approvals and findings, but not the test logs, screenshots and reviewer output behind earlier verdicts; the commit messages record what each gate proved.
 - **Skill installs need one extra step.** Copied or linked as a plain skill (including through skills.sh), Helix's hooks are installed once with `helix hooks <agent>`. Only the Claude Code plugin brings them itself.
 
 ## Credits
