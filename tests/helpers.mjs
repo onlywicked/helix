@@ -8,9 +8,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach } from "node:test";
+import { fileURLToPath } from "node:url";
 import { deflateSync } from "node:zlib";
 
-export const HELIX = path.resolve(import.meta.dirname, "..", "plugins", "helix", "skills", "helix", "scripts", "helix.mjs");
+/** This repository's root. */
+export const REPO = fileURLToPath(new URL("..", import.meta.url));
+export const HELIX = path.join(REPO, "plugins", "helix", "skills", "helix", "scripts", "helix.mjs");
 export const SESSION = "session-under-test";
 
 export const FAKE_REVIEWER = `

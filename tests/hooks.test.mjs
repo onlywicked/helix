@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, test } from "node:test";
-import { approvedPlan, briefFile, env, HELIX, helix, hook, plan, reply, root, run, SESSION, state, stop, useRepo, write } from "./helpers.mjs";
+import { approvedPlan, briefFile, env, HELIX, helix, hook, plan, reply, REPO, root, run, SESSION, state, stop, useRepo, write } from "./helpers.mjs";
 
 useRepo();
 
@@ -19,7 +19,7 @@ describe("hooks", () => {
 
   test("the Claude Code plugin's hooks run this CLI", () => {
     approvedPlan();
-    const plugin = path.resolve(import.meta.dirname, "..", "plugins", "helix");
+    const plugin = path.join(REPO, "plugins", "helix");
     const hooks = JSON.parse(fs.readFileSync(path.join(plugin, "hooks/hooks.json"), "utf8")).hooks;
     /** @param {string} event */
     const command = (event) => hooks[event][0].hooks[0].command.replace(" || true", "");
