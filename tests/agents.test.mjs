@@ -21,7 +21,7 @@ describe("other agents", () => {
     const codexHome = path.join(scratch, "codex-home");
     fs.mkdirSync(codexHome);
     const existing = { hooks: { Stop: [{ hooks: [{ type: "command", command: "node other-hook.mjs" }] }],
-      UserPromptSubmit: [{ hooks: [{ type: "command", command: 'bun "/old/helix/scripts/helix.ts" hook prompt || true' }] }] } };
+      UserPromptSubmit: [{ hooks: [{ type: "command", command: 'node "/old/helix/scripts/helix.mjs" hook prompt || true' }] }] } };
     fs.writeFileSync(path.join(codexHome, "hooks.json"), JSON.stringify(existing));
     for (let i = 0; i < 2; i++) {
       const proc = run(["node", HELIX, "hooks", "codex"], { cwd: root, env: { ...env(), CODEX_HOME: codexHome } });

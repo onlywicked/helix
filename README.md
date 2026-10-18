@@ -140,7 +140,7 @@ Plan approval always needs you. To work on several screens at once, start one ru
 
 | | Why | Notes |
 | --- | --- | --- |
-| **Node.js 18+** | the Helix CLI | Plain JavaScript, no dependencies, no build step. Bun works too. |
+| **Node.js 18+** | the Helix CLI | Plain JavaScript, no dependencies, no build step. |
 | **git** | every checkpoint ends in a commit | |
 | **A reviewer CLI** | the UI and review gates | `claude` or `codex`. `helix init` warns when the configured one is missing. Any other model plugs in through the `exec` backend. |
 

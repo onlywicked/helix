@@ -121,9 +121,11 @@ function hookStop(root, runIds, dialect) {
   }
 }
 
-// helix.ts: installed before Helix was plain JavaScript, as `bun .../helix.ts hook ...` or `node .../helix.mjs hook ...`.
-/** @param {unknown} command */
-const isHelixHook = (command) => typeof command === "string" && /helix\.(mjs|ts)"? hook (stop|prompt)/.test(command);
+/**
+ * A Helix hook installed earlier, from this or another copy of the skill.
+ * @param {unknown} command
+ */
+const isHelixHook = (command) => typeof command === "string" && /helix\.mjs"? hook (stop|prompt)/.test(command);
 
 /**
  * Claude-style config: {hooks: {Event: [{hooks: [{type, command, ...}]}]}}.
